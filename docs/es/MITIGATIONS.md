@@ -10,6 +10,8 @@ La Veracode Platform no tiene mitigaciones para los hallazgos de Container, IaC 
 
 1. **Solicitar.** Pulsa **Mitigate** en el hallazgo, en `FINDINGS.md` o en su página de asset. Se abre una incidencia ya rellenada. Elige
    el tipo, escribe el motivo, añade una fecha de caducidad (obligatoria para `accept-risk`) y envíala.
+   El bot comenta los detalles del hallazgo (archivo, recurso, escaneo, enlace a Veracode, descripción, otros assets
+   con el mismo Finding ID) para que el aprobador tenga el contexto.
 2. **Aprobar.** Un aprobador (un login de la variable `MITIGATION_APPROVERS`) añade la etiqueta `approved`.
 3. **Listo.** El bot añade la siguiente entrada (`M-0001`, `M-0002`, ...) a `mitigations.yml`, actualiza el panel,
    comenta "Approved as M-0001, applied to 1 finding(s)" y cierra la incidencia.

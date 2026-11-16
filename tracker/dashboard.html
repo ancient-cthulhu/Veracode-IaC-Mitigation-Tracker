@@ -77,6 +77,7 @@ button, input, select { font: inherit; color: inherit; }
 .asset { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; width: 100%; text-align: left; padding: 8px 8px;
   border: 0; background: none; border-radius: var(--radius); cursor: pointer; }
 .asset:hover { background: var(--hover); }
+.asset[hidden], select[hidden] { display: none; }
 .asset.active { background: var(--selected); }
 .asset .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset .count { color: var(--muted); font-size: 12px; }
@@ -179,6 +180,8 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
           <button data-view="mitigated">Mitigated</button>
         </div>
         <select id="severity" aria-label="Severity"><option value="">Any severity</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select>
+        <select id="team" aria-label="Team" hidden><option value="">Any team</option></select>
+        <select id="asset-select" aria-label="Asset"><option value="">Any asset</option></select>
         <select id="status" aria-label="Status"><option value="">Any status</option><option>New</option><option>Reopened</option><option>Open</option><option>Asset Missing</option></select>
         <select id="type" aria-label="Finding type"><option value="">Any type</option></select>
       </div>
@@ -216,7 +219,8 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
   const F = D.findings, C = D.config, SEV = ['Critical', 'High', 'Medium', 'Low'];
   const $ = id => document.getElementById(id);
   const PAGE = 100;
-  const state = { q: '', view: 'all', severity: '', status: '', type: '', asset: '', sort: 'severity', asc: false, page: 0 };
+  const state = { q: '', view: 'all', severity: '', status: '', type: '', team: '', asset: '', sort: 'severity', asc: false, page: 0 };
+  const KEYS = ['q', 'view', 'severity', 'status', 'type', 'team', 'asset', 'mit'];
 
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
   const https = v => { try { const u = new URL(v); return u.protocol === 'https:' ? u.href : ''; } catch { return ''; } };
@@ -262,14 +266,14 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
 
   // Assets rail
   const assetMap = new Map();
-  F.forEach(f => { const a = assetMap.get(f.assetKey) || { key: f.assetKey, label: f.assetLabel, n: 0, Critical: 0, High: 0, Medium: 0, Low: 0 }; a.n++; if (SEV.includes(f.severity)) a[f.severity]++; assetMap.set(f.assetKey, a); });
+  F.forEach(f => { const a = assetMap.get(f.assetKey) || { key: f.assetKey, label: f.assetLabel, team: f.team, n: 0, Critical: 0, High: 0, Medium: 0, Low: 0 }; a.n++; if (SEV.includes(f.severity)) a[f.severity]++; assetMap.set(f.assetKey, a); });
   const assets = [...assetMap.values()].sort((a, b) => b.Critical - a.Critical || b.High - a.High || b.Medium - a.Medium || b.n - a.n || a.label.localeCompare(b.label));
   $('asset-count').textContent = assets.length + ' with findings';
   $('all-count').textContent = String(F.length);
   $('all-assets').onclick = () => set({ asset: '' });
   const railBody = $('assets');
   assets.forEach(a => {
-    const b = el('button', null, 'asset'); b.dataset.key = a.key;
+    const b = el('button', null, 'asset'); b.dataset.key = a.key; b.dataset.team = a.team || '';
     b.append(el('span', a.label, 'name'), el('span', String(a.n), 'count'));
     const bar = el('span', null, 'bar');
     SEV.forEach(s => { if (a[s]) { const i = el('i', null, sevClass(s)); i.style.flex = String(a[s]); bar.append(i); } });
@@ -277,6 +281,16 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     b.onclick = () => set({ asset: state.asset === a.key ? '' : a.key });
     railBody.append(b);
   });
+  [...assets].sort((a, b) => a.label.localeCompare(b.label)).forEach(a => { const o = el('option', a.label); o.value = a.key; o.dataset.team = a.team || ''; $('asset-select').append(o); });
+
+  // Teams (only when teams.yml assigns them)
+  const teams = [...new Set(F.map(f => f.team).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (teams.length) {
+    $('team').hidden = false;
+    teams.forEach(t => $('team').append(el('option', t)));
+    if (F.some(f => !f.team)) { const o = el('option', 'No team'); o.value = '-'; $('team').append(o); }
+  }
+  const teamOk = f => !state.team || (state.team === '-' ? !f.team : f.team === state.team);
 
   // Types
   const types = [...new Set(F.map(f => f.type).filter(Boolean))].sort();
@@ -293,6 +307,7 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
       (!state.severity || f.severity === state.severity) &&
       (!state.status || f.status === state.status) &&
       (!state.type || f.type === state.type) &&
+      teamOk(f) &&
       (!state.asset || f.assetKey === state.asset) &&
       (!q || f.search.includes(q)));
   }
@@ -311,7 +326,9 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     if (f.type) fd.append(' ', el('span', f.type, 'type'));
     if (f.title) { const t = el('span', f.title, 'title'); t.title = f.title; fd.append(t); }
     tr.append(fd);
-    const as = el('td', f.assetLabel, 'assetcol'); as.title = f.assetLabel; tr.append(as);
+    const as = el('td', f.assetLabel, 'assetcol'); as.title = f.assetLabel + (f.team ? ' · ' + f.team : '');
+    if (f.team) as.append(el('span', f.team, 'title'));
+    tr.append(as);
     const loc = el('td', f.location, 'loc'); loc.title = f.location; tr.append(loc);
     const age = el('td', f.daysOpen >= 0 ? f.daysOpen + 'd' : '', 'age'); if (f.firstSeen) age.title = 'First seen ' + f.firstSeen; tr.append(age);
     const st = el('td', null, 'state');
@@ -339,7 +356,7 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     const start = state.page * PAGE, slice = data.slice(start, start + PAGE);
     const body = $('rows'); body.replaceChildren(...slice.map(row));
     if (!data.length) { const td = el('td', F.length ? 'No findings match these filters.' : 'No open findings.', 'empty'); td.colSpan = 7; const tr = el('tr'); tr.append(td); body.append(tr); }
-    const active = !!(state.q || state.view !== 'all' || state.severity || state.status || state.type || state.asset || state.mit);
+    const active = !!(state.q || state.view !== 'all' || state.severity || state.status || state.type || state.team || state.asset || state.mit);
     $('shown').textContent = active ? data.length + ' of ' + F.length + ' findings' : F.length + ' findings';
     $('clear').hidden = !active;
     $('page-info').textContent = pages > 1 ? 'Page ' + (state.page + 1) + ' of ' + pages + ' · ' + (start + 1) + '–' + Math.min(start + PAGE, data.length) : '';
@@ -347,6 +364,8 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     $('prev').hidden = $('next').hidden = pages <= 1;
     // reflect state in controls
     $('q').value = state.q; $('severity').value = state.severity; $('status').value = state.status; $('type').value = state.type;
+    $('team').value = state.team; $('asset-select').value = state.asset;
+    document.querySelectorAll('#assets .asset, #asset-select option[data-team]').forEach(b => { b.hidden = !!state.team && (state.team === '-' ? !!b.dataset.team : b.dataset.team !== state.team); });
     document.querySelectorAll('#view button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
     document.querySelectorAll('.asset').forEach(b => b.classList.toggle('active', (b.dataset.key || '') === state.asset));
     document.querySelectorAll('.cell[data-key]').forEach(b => {
@@ -354,7 +373,7 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
       b.classList.toggle('active', (k === 'sev' && state.severity === v) || (k === 'view' && state.view === v) || (k === 'mit' && state.mit === v));
     });
     document.querySelectorAll('th button').forEach(b => { b.classList.toggle('sorted', b.dataset.sort === state.sort); b.classList.toggle('asc', b.dataset.sort === state.sort && state.asc); });
-    const h = new URLSearchParams(); for (const k of ['q', 'view', 'severity', 'status', 'type', 'asset', 'mit']) if (state[k] && !(k === 'view' && state[k] === 'all')) h.set(k, state[k]);
+    const h = new URLSearchParams(); for (const k of KEYS) if (state[k] && !(k === 'view' && state[k] === 'all')) h.set(k, state[k]);
     const hash = h.toString(); if (hash !== location.hash.slice(1)) history.replaceState(null, '', hash ? '#' + hash : location.pathname);
   }
   function set(patch) { if (!('mit' in patch)) patch.mit = ''; Object.assign(state, patch, { page: 0 }); render(); }
@@ -364,16 +383,18 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
   $('severity').onchange = e => set({ severity: e.target.value, mit: state.mit });
   $('status').onchange = e => set({ status: e.target.value, mit: state.mit });
   $('type').onchange = e => set({ type: e.target.value, mit: state.mit });
+  $('team').onchange = e => set({ team: e.target.value, asset: '', mit: state.mit });
+  $('asset-select').onchange = e => set({ asset: e.target.value, mit: state.mit });
   document.querySelectorAll('#view button').forEach(b => b.onclick = () => set({ view: b.dataset.view }));
   document.querySelectorAll('th button').forEach(b => b.onclick = () => { if (state.sort === b.dataset.sort) state.asc = !state.asc; else { state.sort = b.dataset.sort; state.asc = false; } render(); });
-  $('clear').onclick = () => set({ q: '', view: 'all', severity: '', status: '', type: '', asset: '' });
+  $('clear').onclick = () => set({ q: '', view: 'all', severity: '', status: '', type: '', team: '', asset: '' });
   $('prev').onclick = () => { state.page--; render(); window.scrollTo({ top: 0 }); };
   $('next').onclick = () => { state.page++; render(); window.scrollTo({ top: 0 }); };
   document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== $('q')) { e.preventDefault(); $('q').focus(); } });
 
   // Restore from hash
   const h = new URLSearchParams(location.hash.slice(1));
-  for (const k of ['q', 'view', 'severity', 'status', 'type', 'asset', 'mit']) if (h.get(k)) state[k] = h.get(k);
+  for (const k of KEYS) if (h.get(k)) state[k] = h.get(k);
   if (!['all', 'action', 'new', 'mitigated'].includes(state.view)) state.view = 'all';
 
   // Fixed

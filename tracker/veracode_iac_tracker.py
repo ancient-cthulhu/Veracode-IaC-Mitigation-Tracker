@@ -101,7 +101,10 @@ TRACK_MITIGATION_COLUMNS = ["Mitigation Status", "Mitigation Type", "Mitigation 
 TRACK_COLUMNS = ["Status", "Severity", "Finding Type", "Finding ID", "Title", "Asset Name", "Location",
                  "Fixed Versions", "First Seen", "Last Seen", "Days Open", *TRACK_MITIGATION_COLUMNS,
                  "Veracode Link", "Asset ID", "Finding Key", "Mitigation ID", "File Path", "Scan Type", "Scan ID",
-                 "Scan Date", "Detected On", "Reopened On", "Asset Missing Since"]
+                 "Scan Date", "Detected On", "Reopened On", "Asset Missing Since",
+                 # context for people and for the mitigation request comment
+                 "Team", "Resource", "Scanned By", "Suggested Fix", "Description"]
+CONTEXT_TEXT_MAX = {"Description": 600, "Suggested Fix": 400}
 FIXED_COLUMNS = ["Fixed On", "Fixed Reason", "Days Open", "Severity", "Finding Type", "Finding ID", "Title",
                  "Asset Name", "Location", "First Seen", "Last Seen", "Mitigation Status", "Mitigation ID",
                  "Veracode Link", "Asset ID", "Finding Key", "Fixed By Scan"]
@@ -136,7 +139,10 @@ def tracker_row(row: dict[str, Any]) -> dict[str, Any]:
     """The tracker's compact view of a finding row."""
     out = {c: row.get(c, "") for c in ("Severity", "Finding Type", "Finding ID", "Title", "Asset Name",
                                        "Fixed Versions", "Veracode Link", "Asset ID", "Finding Key", "File Path",
-                                       "Scan Type", "Scan ID", "Scan Date")}
+                                       "Scan Type", "Scan ID", "Scan Date", "Resource", "Scanned By")}
+    for c, limit in CONTEXT_TEXT_MAX.items():
+        text = str(row.get(c) or "")
+        out[c] = text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
     out["Location"] = row.get("Location") or ""
     if str(row.get("Finding Type") or "").lower() == "vulnerability" and row.get("Library"):
         out["Location"] = row["Library"]
@@ -342,11 +348,13 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
                  fixed_new: list[dict], counts: Counter, run_info: dict, now: dt.datetime,
                  rules: Optional["Rules"] = None, notes: Optional[list[str]] = None) -> int:
     today = now.date()
+    teams = getattr(args, "team_rules", None) or []
     for row in rows:
         if rules:
             rules.apply(row)
         else:
             clear_mitigation(row)
+        row["Team"] = team_of(row, teams)
     refresh_days_open(rows, today)
     fixed_all = merge_fixed(fixed_log, fixed_new)
     err = write_track_outputs(paths, rows, fixed_all)
@@ -368,7 +376,8 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
         html_rel = os.path.relpath(os.path.abspath(args.html_dashboard), dash_dir).replace("\\", "/")
     atomic_write_text(dashboard, render_dashboard(rows, fixed_all, run_info, now, repo_url, rel, pages_rel, html_rel))
     back = os.path.relpath(os.path.abspath(dashboard), os.path.abspath(pages_dir)).replace("\\", "/")
-    n_pages = write_asset_pages(pages_dir, render_asset_pages(rows, now, repo_url, back))
+    n_pages = write_asset_pages(pages_dir, {**render_asset_pages(rows, now, repo_url, back),
+                                            **render_team_pages(rows, now, repo_url, back)})
     if args.html_dashboard:
         html_track = os.path.relpath(os.path.abspath(args.track),
                                      os.path.dirname(os.path.abspath(args.html_dashboard))).replace("\\", "/")
@@ -384,7 +393,7 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
     print("\n" + "\n".join("  " + ln for ln in lines))
     for msg in (notes or [])[:10]:
         print(f"  NOTE: {msg}")
-    print(f"\nWrote {len(rows)} open finding(s) to {paths['findings']}, {n_pages} asset page(s) to {pages_dir}")
+    print(f"\nWrote {len(rows)} open finding(s) to {paths['findings']}, {n_pages} team and asset page(s) to {pages_dir}")
     step_summary("### Veracode findings tracker\n\n" + "\n".join(f"- {ln}" for ln in lines))
     github_output(new=counts["new"], reopened=counts["reopened"], fixed=counts["fixed"] + counts["removed"],
                   open=len(rows))
@@ -419,7 +428,10 @@ def mitigate_url(repo_url: str, row: dict[str, Any]) -> str:
     if not repo_url:
         return ""
     fid, asset = str(row.get("Finding ID") or ""), str(row.get("Asset Name") or "")
-    params = {"template": "mitigation.yml", "title": f"Mitigate: {fid} in {asset}"[:200],
+    sev, title = str(row.get("Severity") or "").strip(), str(row.get("Title") or "").strip()
+    head = f"Mitigate {sev} {fid}" if sev else f"Mitigate {fid}"
+    params = {"template": "mitigation.yml",
+              "title": (f"{head}: {title[:90]} ({asset})" if title else f"{head} in {asset}")[:200],
               "finding_key": row.get("Finding Key") or "", "finding_id": fid[:200], "asset": asset[:300]}
     return f"{repo_url}/issues/new?{urlencode(params, quote_via=quote)}"
 
@@ -520,12 +532,50 @@ def asset_table(rows: Iterable[dict]) -> list[dict[str, Any]]:
             c["Attention"] += 1 if ms in _ATTENTION else 0
         name, asset_id = str(group[0].get("Asset Name") or "Unknown asset"), str(group[0].get("Asset ID") or "")
         out.append({"key": key, "name": name, "id": asset_id, "slug": asset_page_slug(asset_id, name),
+                    "team": str(group[0].get("Team") or ""),
                     "Findings": len(group), **{k: c[k] for k in ("Critical", "High", "Medium", "Low", "New",
                                                                    "Mitigated", "Attention")}})
     names = Counter(a["name"].lower() for a in out)
     for a in out:
         a["label"] = f"{a['name']} ({a['id']})" if names[a["name"].lower()] > 1 and a["id"] else a["name"]
     return sorted(out, key=lambda a: (-a["Critical"], -a["High"], -a["Medium"], -a["Low"], a["label"].lower()))
+
+
+def team_slug(team: str) -> str:
+    import hashlib
+    base = re.sub(r"[^a-z0-9]+", "-", team.lower()).strip("-")[:40] or "team"
+    return f"team-{base}-{hashlib.sha1(team.encode('utf-8')).hexdigest()[:6]}"
+
+
+def needs_action(rows: Iterable[dict]) -> list[dict]:
+    """New or reopened findings and mitigations that expire soon or expired; expired first, then by severity."""
+    return sorted((r for r in rows if r.get("Status") in (NEW, REOPENED) or r.get("Mitigation Status") in _ATTENTION),
+                  key=lambda r: (0 if r.get("Mitigation Status") == "Expired" else 1,) + _sort_key(r))
+
+
+def team_table(rows: list[dict]) -> list[dict[str, Any]]:
+    """One row per team ('' = no team), from the asset rows."""
+    teams: dict[str, Counter] = {}
+    for a in asset_table(rows):
+        c = teams.setdefault(a["team"], Counter())
+        c["Assets"] += 1
+        for k in ("Findings", "Critical", "High", "Medium", "Low", "New", "Mitigated", "Attention"):
+            c[k] += a[k]
+    out = [{"team": t, "slug": team_slug(t) if t else "", **c} for t, c in teams.items()]
+    return sorted(out, key=lambda r: (r["team"] == "", -r["Critical"], -r["High"], -r["Medium"], r["team"].lower()))
+
+
+def _asset_rows_md(assets: list[dict], link_prefix: str, show_team: bool) -> list[str]:
+    cols = ["Asset"] + (["Team"] if show_team else []) + ["Findings", "Critical", "High", "Medium", "Low", "New",
+                                                          "Mitigated", "Expiring / expired"]
+    out = ["| " + " | ".join(cols) + " |", "|" + " --- |" * len(cols)]
+    for a in assets:
+        team = [md_safe(a["team"], 80)] if show_team else []
+        out.append("| " + " | ".join([f"[{md_safe(a['label'], 120)}]({link_prefix}{a['slug']}.md)"] + team + [
+            str(a[k]) for k in ("Findings", "Critical", "High", "Medium", "Low", "New", "Mitigated", "Attention")]) + " |")
+    if not assets:
+        out.append("| _No open findings._" + " |" * len(cols))
+    return out
 
 
 def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
@@ -573,24 +623,29 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
         out += ["_Mitigate links are off: run in GitHub Actions or pass --repo-url._", ""]
     cell = _row_cell(repo_url)
 
-    action = sorted((r for r in rows if r.get("Status") in (NEW, REOPENED) or r.get("Mitigation Status") in _ATTENTION),
-                    key=lambda r: (0 if r.get("Mitigation Status") == "Expired" else 1,) + _sort_key(r))
+    teams = team_table(rows)
+    show_team = any(t["team"] for t in teams)
+    action = needs_action(rows)
     out += [f"## Needs action ({len(action)})", "",
             "_New or reopened findings and mitigations that expire within 30 days or already expired._", ""]
-    lines, _ = dashboard_table(["Why", "Severity", "Finding ID", "Title", "Asset", "Days Open", "Links"], action, cell,
-                               DASHBOARD_LIMIT // 3, f"The rest are on the asset pages under {pages_rel}/.")
+    cols = ["Why", "Severity", "Finding ID", "Title", "Asset"] + (["Team"] if show_team else []) + ["Days Open", "Links"]
+    lines, _ = dashboard_table(cols, action, cell, DASHBOARD_LIMIT // 3,
+                               f"The rest are on the team and asset pages under {pages_rel}/.")
     out += lines + [""]
 
+    if show_team:
+        out += [f"## Teams ({sum(1 for t in teams if t['team'])})", "",
+                "_Each team page lists what needs action and the team's assets._", "",
+                "| Team | Assets | Findings | Critical | High | Medium | Low | Needs action |", "|" + " --- |" * 8]
+        for t in teams:
+            name = f"[{md_safe(t['team'], 80)}]({pages_rel}/{t['slug']}.md)" if t["team"] else "_No team_"
+            out.append(f"| {name} | {t['Assets']} | {t['Findings']} | {t['Critical']} | {t['High']} | {t['Medium']} | "
+                       f"{t['Low']} | {t['New'] + t['Attention']} |")
+        out.append("")
+
     out += [f"## Assets ({len(assets)})", "",
-            "_Counts are unmitigated findings. Click an asset for every finding with its links._", "",
-            "| Asset | Findings | Critical | High | Medium | Low | New | Mitigated | Expiring / expired |",
-            "|" + " --- |" * 9]
-    for a in assets:
-        out.append(f"| [{md_safe(a['label'], 120)}]({pages_rel}/{a['slug']}.md) | {a['Findings']} | {a['Critical']} | "
-                   f"{a['High']} | {a['Medium']} | {a['Low']} | {a['New']} | {a['Mitigated']} | {a['Attention']} |")
-    if not assets:
-        out.append("| _No open findings._ | | | | | | | | |")
-    out.append("")
+            "_Counts are unmitigated findings. Click an asset for every finding with its links._", ""]
+    out += _asset_rows_md(assets, f"{pages_rel}/", show_team) + [""]
 
     out += [f"## Fixed in the last 30 days ({len(recent)})", ""]
     lines, _ = dashboard_table(["Fixed On", "Severity", "Finding ID", "Title", "Asset", "Location", "Days Open",
@@ -618,6 +673,7 @@ def render_asset_pages(rows: list[dict], now: dt.datetime, repo_url: str,
         for i, chunk in enumerate(chunks):
             out = [ASSET_PAGE_MARKER, f"# {md_safe(a['name'], 200)}", "",
                    f"[← Dashboard]({dashboard_rel}) · Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC"
+                   + (f" · Team: [{md_safe(a['team'], 80)}]({team_slug(a['team'])}.md)" if a["team"] else "")
                    + (f" · Asset ID: `{md_safe(a['id'])}`" if a["id"] else ""), ""]
             if len(chunks) > 1:
                 nav = " · ".join(f"**{n + 1}**" if n == i else f"[{n + 1}]({names[n]})" for n in range(len(chunks)))
@@ -641,6 +697,34 @@ def render_asset_pages(rows: list[dict], now: dt.datetime, repo_url: str,
             if not chunk:
                 out += ["## Open findings (0)", "", "None."]
             pages[names[i]] = "\n".join(out) + "\n"
+    return pages
+
+
+def render_team_pages(rows: list[dict], now: dt.datetime, repo_url: str,
+                      dashboard_rel: str = "../FINDINGS.md") -> dict[str, str]:
+    """{file name: Markdown} for every team: what needs action (with links) and the team's assets."""
+    dashboard_rel = _rel_ok(dashboard_rel, "../FINDINGS.md")
+    cell = _row_cell(repo_url)
+    pages: dict[str, str] = {}
+    assets = asset_table(rows)
+    for t in team_table(rows):
+        if not t["team"]:
+            continue
+        mine = [r for r in rows if r.get("Team") == t["team"]]
+        action = needs_action(mine)
+        out = [ASSET_PAGE_MARKER, f"# Team: {md_safe(t['team'], 80)}", "",
+               f"[← Dashboard]({dashboard_rel}) · Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC", "",
+               "| Assets | Findings | Critical | High | Medium | Low | Mitigated | Needs action |", "|" + " --- |" * 8,
+               f"| {t['Assets']} | {t['Findings']} | {t['Critical']} | {t['High']} | {t['Medium']} | {t['Low']} | "
+               f"{t['Mitigated']} | {len(action)} |", ""]
+        if not repo_url:
+            out += ["_Mitigate links are off: run in GitHub Actions or pass --repo-url._", ""]
+        out += [f"## Needs action ({len(action)})", ""]
+        lines, _ = dashboard_table(["Why", "Severity", "Finding ID", "Title", "Asset", "Days Open", "Links"], action,
+                                   cell, DASHBOARD_LIMIT // 2, "The rest are on the asset pages below.")
+        out += lines + ["", f"## Assets ({t['Assets']})", ""]
+        out += _asset_rows_md([a for a in assets if a["team"] == t["team"]], "", False)
+        pages[f"{t['slug']}.md"] = "\n".join(out) + "\n"
     return pages
 
 
@@ -709,6 +793,7 @@ def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dic
             "asset": name,
             "assetId": str(row.get("Asset ID") or ""),
             "assetKey": asset_key(row.get("Asset ID"), name),
+            "team": str(row.get("Team") or ""),
             "location": str(row.get("Location") or row.get("File Path") or ""),
             "firstSeen": str(row.get("First Seen") or "")[:10],
             "daysOpen": _int_or(row.get("Days Open")),
@@ -719,7 +804,7 @@ def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dic
             "mitigateUrl": "" if ms == "Mitigated" else mitigate_url(repo_url, row),
             "findingKey": str(row.get("Finding Key") or ""),
         }
-        f["search"] = " ".join([f["id"], f["title"], name, f["location"], f["findingKey"], f["type"],
+        f["search"] = " ".join([f["id"], f["title"], name, f["location"], f["findingKey"], f["type"], f["team"],
                                 f["mitigation"]["id"]]).lower()
         findings.append(f)
     keys_by_name: dict[str, set[str]] = {}
@@ -764,6 +849,12 @@ def run_track(args: argparse.Namespace, now: dt.datetime, minter: Optional[Calla
     baseline, fixed_log, err = load_track_files(paths)
     if err:
         print(f"error: {err}", file=sys.stderr)
+        return 2
+    args.team_rules, team_errors = load_teams(args.teams)
+    if team_errors:
+        for msg in team_errors:
+            print(f"error: {args.teams} {msg}", file=sys.stderr)
+        print("Nothing was changed.", file=sys.stderr)
         return 2
     rules, notes = None, []
     if args.mitigations:
@@ -1411,6 +1502,132 @@ def count_matches(entry: dict[str, Any], track_dir: Optional[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Teams (teams.yml, optional)
+# ---------------------------------------------------------------------------
+# teams.yml maps a team name to asset name or ID patterns (* = any text). The first team that matches wins.
+
+TEAM_NAME_MAX = 80
+
+
+def load_teams(path: Optional[str]) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """([(team, patterns)], errors). A missing file means no teams."""
+    if not path or not os.path.exists(path):
+        return [], []
+    yaml = require_yaml()
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return [], [f"is not valid YAML: {str(exc)[:200]}"]
+    if not isinstance(data, dict):
+        return [], ["must map team names to lists of asset patterns (see the comments in the file)"]
+    teams, errors = [], []
+    for name, pats in data.items():
+        team = _RE_UNPRINTABLE.sub(" ", str(name or "")).strip()
+        pats = [pats] if isinstance(pats, str) else pats
+        if not team or len(team) > TEAM_NAME_MAX:
+            errors.append(f"team name {team[:40]!r} must be 1-{TEAM_NAME_MAX} characters")
+        elif not isinstance(pats, list) or not pats or not all(isinstance(p, str) and p.strip() for p in pats):
+            errors.append(f"team {team!r} needs a list of asset patterns")
+        else:
+            teams.append((team, [p.strip()[:RULE_PATTERN_MAX] for p in pats]))
+    return teams, errors
+
+
+def team_of(row: dict[str, Any], teams: list[tuple[str, list[str]]]) -> str:
+    for team, pats in teams:
+        if any(glob_match(p, row.get("Asset Name")) or glob_match(p, row.get("Asset ID")) for p in pats):
+            return team
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Finding details for a new mitigation request (--describe-issue)
+# ---------------------------------------------------------------------------
+# The workflow comments this on every new mitigation request, so the approver sees what is being mitigated
+# without opening Veracode. Everything comes from tracking/ and goes through md_safe.
+
+DESCRIBE_MARKER = "<!-- veracode-finding-details -->"
+
+
+def describe_issue(issue_path: str, track_dir: str, today: dt.date) -> int:
+    """Prints a Markdown comment with the finding behind a mitigation request. Always exit 0 when readable."""
+    try:
+        with open(issue_path, encoding="utf-8") as fh:
+            issue = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"error: cannot read the issue JSON: {exc}", file=sys.stderr)
+        return 2
+    fields, _ = parse_issue_form(issue.get("body") if isinstance(issue, dict) else "")
+    key = fields.get("finding_key", "").strip().lower()
+    asset = fields.get("asset", "").strip()
+    paths = track_paths(track_dir)
+    open_rows = read_csv_file(paths["findings"]) if os.path.exists(paths["findings"]) else []
+    fixed_rows = read_csv_file(paths["fixed"]) if os.path.exists(paths["fixed"]) else []
+    print(render_issue_details(key, asset, open_rows, fixed_rows, today))
+    return 0
+
+
+def render_issue_details(key: str, asset: str, open_rows: list[dict], fixed_rows: list[dict], today: dt.date) -> str:
+    out = [DESCRIBE_MARKER]
+    if not _RE_MKEY.match(key):
+        return "\n".join(out + ["**No finding details:** the Finding Key is missing or not in the form mk-0123456789ab. "
+                                "Use the Mitigate link in FINDINGS.md or the asset page."])
+    hits = [r for r in open_rows if str(r.get("Finding Key") or "").lower() == key]
+    if asset and len(hits) > 1:
+        hits = [r for r in hits if glob_match(asset, r.get("Asset Name"))] or hits
+    fixed = None
+    if not hits:
+        fixed = next((r for r in fixed_rows if str(r.get("Finding Key") or "").lower() == key), None)
+        if not fixed:
+            return "\n".join(out + [f"**No finding details:** {md_safe(key)} is not in the current findings. "
+                                    "It may be fixed already, or the key is wrong."])
+    r: dict = hits[0] if hits else (fixed or {})
+    sev, fid, title = md_safe(r.get("Severity")), md_safe(r.get("Finding ID")), md_safe(r.get("Title"), 200)
+    out += [f"#### {sev} · {fid} · {title}", ""]
+    if fixed:
+        out += [f"> [!NOTE]\n> Already fixed on {md_safe(fixed.get('Fixed On'))} ({md_safe(fixed.get('Fixed Reason'))}). "
+                "A mitigation is probably not needed.", ""]
+    status = md_safe(r.get("Status") or "Fixed")
+    if r.get("Days Open") not in (None, ""):
+        status += f", open {md_safe(r.get('Days Open'))} days"
+    if r.get("First Seen"):
+        status += f" (first seen {md_safe(r.get('First Seen'))})"
+    scan = " · ".join(md_safe(x) for x in (str(r.get("Scan Type") or "").title(), str(r.get("Scan Date") or "")[:10])
+                      if x)
+    if r.get("Scanned By"):
+        scan += f" · by {md_safe(r.get('Scanned By'))}"
+    if r.get("Scan ID"):
+        scan += f" · scan {md_safe(r.get('Scan ID'))}"
+    location = str(r.get("Location") or "")
+    file_path = str(r.get("File Path") or "")
+    rows = [("Asset", md_safe(r.get("Asset Name"), 200) + (f" ({md_safe(r.get('Asset ID'))})" if r.get("Asset ID") else "")),
+            ("Team", md_safe(r.get("Team"))),
+            ("Type", md_safe(r.get("Finding Type"))),
+            ("Location", md_safe(location, 300)),
+            ("File", md_safe(file_path, 300) if file_path and file_path not in location else ""),
+            ("Resource", md_safe(r.get("Resource"), 200)),
+            ("Fixed versions", md_safe(r.get("Fixed Versions"), 200)),
+            ("Status", status),
+            ("Mitigation", md_safe(" ".join(str(r.get(c) or "") for c in ("Mitigation Status", "Mitigation ID",
+                                                                           "Mitigation Expires")).strip())),
+            ("Scan", scan),
+            ("Veracode", md_link("Open the scan in Veracode", r.get("Veracode Link")))]
+    out += ["| | |", "| --- | --- |"] + [f"| **{k}** | {v} |" for k, v in rows if v]
+    for label, col in (("Description", "Description"), ("Suggested fix", "Suggested Fix")):
+        if r.get(col):
+            out += ["", f"**{label}**", "", "> " + md_safe(r.get(col), 1000)]
+    same = [x for x in open_rows if x.get("Finding ID") == r.get("Finding ID") and x is not r]
+    if same:
+        other_assets = {x.get("Asset Name") for x in same if x.get("Asset Name") != r.get("Asset Name")}
+        out += ["", f"_{len(same) + 1} open findings have this Finding ID"
+                + (f", in {len(other_assets) + 1} assets. To mitigate them together, put a wildcard in Asset "
+                   "(for example `*`) and keep the Finding ID." if other_assets else ".") + "_"]
+    out += ["", f"<sub>From the tracker baseline on {today.isoformat()}. Finding Key {md_safe(key)}.</sub>"]
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Migration from the old tracking CSV (veracode-findings.csv, --mitigations FILE.csv in older versions)
 # ---------------------------------------------------------------------------
 
@@ -1531,6 +1748,9 @@ Exports with finding filters are not supported by this tracker.""")
                    help="With --track: where to write the Markdown dashboard (default FINDINGS.md next to DIR).")
     g.add_argument("--asset-pages", metavar="DIR",
                    help="With --track: folder for the per-asset Markdown pages (default findings/ next to the dashboard).")
+    g.add_argument("--teams", metavar="FILE",
+                   help="With --track: teams.yml mapping teams to asset patterns. Adds a Team column, team pages and "
+                        "a team filter. A missing file means no teams.")
     g.add_argument("--html-dashboard", metavar="FILE",
                    help="With --track: also write a self-contained HTML dashboard (for GitHub Pages on GitHub "
                         "Enterprise Cloud, where Pages can be private). Off by default: GitHub shows HTML as source.")
@@ -1579,6 +1799,9 @@ Exports with finding filters are not supported by this tracker.""")
     g.add_argument("--approver", metavar="LOGIN",
                    help="With --approve-issue: GitHub login that added the approved label. Must be listed in the "
                         "MITIGATION_APPROVERS environment variable (comma or space separated).")
+    g.add_argument("--describe-issue", metavar="ISSUE_JSON",
+                   help="Print a Markdown comment with the details of the finding behind a mitigation request "
+                        "(severity, file, resource, scan, Veracode link, description). Needs --track DIR.")
 
     g = p.add_argument_group("Veracode connection")
     g.add_argument("--max-workers", type=int, default=4, help="Concurrent requests (default 4).")
@@ -1622,6 +1845,11 @@ def main(argv: Optional[list[str]] = None, minter: Optional[Callable[[], str]] =
             return 2
         return approve_issue(args.approve_issue, args.mitigations, args.approver,
                              os.environ.get("MITIGATION_APPROVERS"), now.date(), args.track)
+    if args.describe_issue:
+        if not args.track:
+            print("error: --describe-issue needs --track DIR", file=sys.stderr)
+            return 2
+        return describe_issue(args.describe_issue, args.track, now.date())
     if not args.track:
         print("error: use --track DIR, --check-mitigations FILE or --approve-issue ISSUE_JSON (see --help)",
               file=sys.stderr)

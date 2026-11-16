@@ -1,0 +1,13 @@
+# Optional: who owns which assets. Adds a Team column, a Teams table and one page per team in FINDINGS.md,
+# a Team filter in the HTML dashboard, and the team in the details comment on mitigation requests.
+#
+# Each team lists asset name or asset ID patterns; * matches any text, matching ignores case.
+# An asset belongs to the first team that matches. Assets that match no team show as "No team".
+#
+# payments:
+#   - acme/payments-*
+#   - registry/acme/payments-api*
+# platform:
+#   - acme/terraform-*
+#   - acme/k8s-*
+{}

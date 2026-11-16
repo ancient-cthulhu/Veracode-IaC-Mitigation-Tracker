@@ -1,5 +1,7 @@
 # Veracode mitigations.
 #
+#   New mitigation request issue     comments the finding's details (severity, file, resource, scan,
+#                                    Veracode link, description) from tracking/findings.csv.
 #   Issue labelled `approved`        records the mitigation request in mitigations.yml, refreshes the
 #                                    dashboard, comments and closes the issue. Only logins listed in the
 #                                    repository variable MITIGATION_APPROVERS can approve.
@@ -13,7 +15,7 @@ name: Veracode mitigations
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, labeled]
   pull_request:
     paths:
       - mitigations.yml
@@ -21,6 +23,34 @@ on:
 permissions: {}
 
 jobs:
+  describe:
+    if: >-
+      github.event_name == 'issues' && github.event.action == 'opened' &&
+      contains(github.event.issue.labels.*.name, 'mitigation-request')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write     # comment the finding details
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      ISSUE: ${{ github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Comment the finding details
+        run: |
+          jq '.issue | {number, title, body}' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/issue.json"
+          python tracker/veracode_iac_tracker.py --describe-issue "$RUNNER_TEMP/issue.json" --track tracking \
+            > "$RUNNER_TEMP/details.md"
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file "$RUNNER_TEMP/details.md"
+
   approve:
     if: >-
       github.event_name == 'issues' &&
@@ -103,7 +133,8 @@ jobs:
         run: |
           args=()
           if [ -n "$HTML_DASHBOARD" ]; then args+=(--html-dashboard "$HTML_DASHBOARD"); fi
-          python tracker/veracode_iac_tracker.py --track tracking --offline --mitigations mitigations.yml "${args[@]}"
+          python tracker/veracode_iac_tracker.py --track tracking --offline --mitigations mitigations.yml --teams teams.yml \
+            "${args[@]}"
           git add -A -- mitigations.yml tracking findings FINDINGS.md
           if [ -d site ]; then git add -A -- site; fi
           if git diff --cached --quiet; then echo "Already recorded."; exit 0; fi

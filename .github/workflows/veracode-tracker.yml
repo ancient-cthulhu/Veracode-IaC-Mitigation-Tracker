@@ -64,7 +64,7 @@ jobs:
           set -f
           read -ra args <<< "${VERACODE_TRACK_ARGS:-}"
           if [ -n "$HTML_DASHBOARD" ]; then args+=(--html-dashboard "$HTML_DASHBOARD"); fi
-          python tracker/veracode_iac_tracker.py --track tracking --mitigations mitigations.yml \
+          python tracker/veracode_iac_tracker.py --track tracking --mitigations mitigations.yml --teams teams.yml \
             -o "$RUNNER_TEMP/veracode-findings.xlsx" "${args[@]}"
 
       - name: Commit the changes
