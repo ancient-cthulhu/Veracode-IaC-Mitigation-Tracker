@@ -1,5 +1,5 @@
 name: Mitigation request
-description: Ask to mitigate a Veracode IaC, container or secrets finding. Easiest from a Mitigate link in FINDINGS.md.
+description: Ask to mitigate a Veracode IaC, container or secrets finding. Use a Mitigate link in site/index.html.
 title: "Mitigate: "
 labels: ["mitigation-request"]
 body:
@@ -13,7 +13,7 @@ body:
     id: finding_key
     attributes:
       label: Finding Key
-      description: The finding's key (mk-...), from FINDINGS.md or tracking/findings.csv. The Mitigate link fills it in.
+      description: The finding's key (mk-...), from site/index.html or tracking/findings.csv. The Mitigate link fills it in.
       placeholder: mk-0123456789ab
     validations:
       required: true

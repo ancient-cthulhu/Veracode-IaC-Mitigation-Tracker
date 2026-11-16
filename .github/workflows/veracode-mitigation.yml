@@ -28,7 +28,7 @@ jobs:
       contains(github.event.issue.labels.*.name, 'mitigation-request')
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # commit mitigations.yml, tracking/ and FINDINGS.md
+      contents: write   # commit mitigations.yml, tracking/, site/ and FINDINGS.md
       issues: write     # comment, remove the label, close
     concurrency:
       group: veracode-tracking   # shared with the daily tracker
@@ -101,7 +101,7 @@ jobs:
           ID: ${{ steps.record.outputs.id }}
         run: |
           python tracker/veracode_iac_tracker.py --track tracking --offline --mitigations mitigations.yml
-          git add -A -- mitigations.yml tracking FINDINGS.md
+          git add -A -- mitigations.yml tracking site FINDINGS.md
           if git diff --cached --quiet; then echo "Already recorded."; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

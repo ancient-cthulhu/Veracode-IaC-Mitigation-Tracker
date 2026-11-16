@@ -3,12 +3,12 @@
 English | [Español](es/MITIGATIONS.md)
 
 The Veracode Platform has no mitigations for Container, IaC and Secrets findings. The
-[findings tracker](../README.md) records them in `mitigations.yml` and shows them in `FINDINGS.md`,
+[findings tracker](../README.md) records them in `mitigations.yml` and shows them in the interactive `site/index.html` dashboard,
 `tracking/findings.csv` and the Excel report.
 
 ## Request and approve
 
-1. **Request.** In `FINDINGS.md`, click **Mitigate** on the finding. A pre-filled issue opens. Pick the type, write
+1. **Request.** In `site/index.html`, click **Mitigate** on the finding. A pre-filled issue opens. Pick the type, write
    the reason, add an expiry date (required for `accept-risk`) and submit.
 2. **Approve.** An approver (a login in the variable `MITIGATION_APPROVERS`) adds the label `approved`.
 3. **Done.** The bot adds the next entry (`M-0001`, `M-0002`, ...) to `mitigations.yml`, updates the dashboard,
@@ -91,7 +91,7 @@ python tracker/veracode_iac_tracker.py --track tracking --mitigations mitigation
 - Only logins in `MITIGATION_APPROVERS` can approve; changing the variable needs admin access.
 - Protect `mitigations.yml`, `.github/` and `tracker/` with [CODEOWNERS](../.github/CODEOWNERS)
   and branch protection.
-- Issue text never reaches a shell, and everything shown in comments and `FINDINGS.md` is escaped.
+- Issue text never reaches a shell, and everything shown in comments, `FINDINGS.md`, and `site/index.html` is escaped.
 - The pull request check runs the tracker modules from the base branch, so a pull request cannot change its own check.
 
 ## Limitations
