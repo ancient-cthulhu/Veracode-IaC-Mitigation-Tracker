@@ -373,7 +373,7 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
         html_track = os.path.relpath(os.path.abspath(args.track),
                                      os.path.dirname(os.path.abspath(args.html_dashboard))).replace("\\", "/")
         atomic_write_text(args.html_dashboard,
-                          render_html_dashboard(rows, fixed_all, run_info, now, repo_url, html_track))
+                          render_html_dashboard(rows, fixed_all, run_info, now, repo_url, html_track, rel))
     t = track_totals(rows)
     sev = ", ".join(f"{SEVERITY_LABEL[r]} {t[SEVERITY_LABEL[r]]}" for r in (5, 4, 3, 2, 1, 0)
                     if t[SEVERITY_LABEL[r]])
@@ -679,15 +679,22 @@ def _int_or(value: Any, default: int = -1) -> int:
 
 
 def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
-                          repo_url: str, track_rel: str = "../tracking") -> str:
+                          repo_url: str, track_rel: str = "../tracking", repo_track_rel: str = "") -> str:
     """Interactive static dashboard (tracker/dashboard.html + a JSON payload).
 
     Every finding is in the page with its Veracode and Mitigate links; the page filters client-side.
     Values are only ever inserted through textContent, and only https URLs are turned into links.
+    With repo_url and repo_track_rel (tracking folder relative to the repository root), the CSV and docs
+    links point at the repository on GitHub, so they work when only the page is published to GitHub Pages.
     """
     track_rel = track_rel.replace("\\", "/").strip("/")
     track_rel = track_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", track_rel) else "../tracking"
     docs_rel = "/".join(track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+    repo_track_rel = _rel_ok(repo_track_rel, "") if repo_track_rel else ""
+    if repo_url and repo_track_rel and not repo_track_rel.startswith(".."):
+        base = f"{repo_url}/blob/HEAD/"
+        docs_rel = base + "/".join(repo_track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+        track_rel = base + repo_track_rel
     today = now.date()
     findings = []
     for row in rows:
