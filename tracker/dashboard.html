@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Veracode findings</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5f6673; --faint: #8a919e;
+  --line: #e1e4ea; --line-strong: #c9ced8; --hover: #f0f2f5; --selected: #e6f4f3;
+  --accent: #0e766c; --accent-ink: #ffffff; --accent-soft: #d9efec;
+  --critical: #b3261e; --high: #c2520a; --medium: #9a6700; --low: #2f5fb5;
+  --ok: #1f7a3c; --warn: #9a6700; --danger: #b3261e;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", "SF Pro Text", -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --panel: #161a20; --ink: #e8ebf0; --muted: #a2a9b5; --faint: #6f7785;
+    --line: #262c36; --line-strong: #39414d; --hover: #1c2129; --selected: #15302d;
+    --accent: #3fbfb0; --accent-ink: #06201d; --accent-soft: #163a36;
+    --critical: #ff6b5f; --high: #ff9a4d; --medium: #e6b94a; --low: #7fa6ff;
+    --ok: #5ccb7c; --warn: #e6b94a; --danger: #ff6b5f;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
+a { color: var(--accent); }
+button, input, select { font: inherit; color: inherit; }
+.page { max-width: 1600px; margin: 0 auto; padding: 20px 24px 48px; }
+
+/* Header */
+.head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; flex-wrap: wrap; }
+.head h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 4px; }
+.meta { color: var(--muted); margin: 0; }
+.meta b { color: var(--ink); font-weight: 600; }
+.meta .sep { color: var(--faint); margin: 0 8px; }
+.head nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 10px; border: 1px solid var(--line-strong);
+  border-radius: var(--radius); background: var(--panel); text-decoration: none; color: var(--ink); cursor: pointer; }
+.btn:hover { background: var(--hover); }
+.btn:focus-visible, input:focus-visible, select:focus-visible, .cell:focus-visible, .asset:focus-visible, .seg button:focus-visible
+  { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* Posture strip */
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); margin: 18px 0 20px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--panel); overflow: hidden; }
+.cell { padding: 12px 14px; border-right: 1px solid var(--line); background: none; border-top: 0; border-bottom: 0; border-left: 0;
+  text-align: left; cursor: pointer; }
+.cell:last-child { border-right: 0; }
+.cell.static { cursor: default; }
+.cell:not(.static):hover { background: var(--hover); }
+.cell.active { background: var(--selected); box-shadow: inset 0 -2px 0 var(--accent); }
+.cell .n { display: block; font-size: 22px; font-weight: 650; line-height: 1.1; }
+.cell .l { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.cell .d { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.cell.group-start { border-left: 2px solid var(--line-strong); }
+.d.critical { background: var(--critical); } .d.high { background: var(--high); } .d.medium { background: var(--medium); } .d.low { background: var(--low); }
+.t-critical { color: var(--critical); } .t-high { color: var(--high); } .t-medium { color: var(--medium); } .t-low { color: var(--low); }
+.t-ok { color: var(--ok); } .t-warn { color: var(--warn); } .t-danger { color: var(--danger); }
+
+/* Layout */
+.body { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 1000px) { .body { grid-template-columns: minmax(0, 1fr); } .rail { position: static; max-height: none; } .assets { max-height: 260px; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.rail { position: sticky; top: 12px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; }
+.rail h2, .toolbar h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.rail header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.rail header small { color: var(--faint); }
+.assets { overflow: auto; padding: 6px; }
+.asset { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; width: 100%; text-align: left; padding: 8px 8px;
+  border: 0; background: none; border-radius: var(--radius); cursor: pointer; }
+.asset:hover { background: var(--hover); }
+.asset.active { background: var(--selected); }
+.asset .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset .count { color: var(--muted); font-size: 12px; }
+.asset .bar { grid-column: 1 / -1; display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--line); }
+.asset .bar i { display: block; height: 100%; }
+.asset .bar .critical { background: var(--critical); } .asset .bar .high { background: var(--high); }
+.asset .bar .medium { background: var(--medium); } .asset .bar .low { background: var(--low); }
+.rail .all { padding: 6px 6px 0; }
+
+/* Toolbar */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.toolbar .search { flex: 1 1 240px; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong);
+  border-radius: var(--radius); background: var(--bg); }
+.toolbar .search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; padding: 5px 0; }
+.toolbar .search kbd { color: var(--faint); font: 11px var(--mono); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; }
+.toolbar select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; }
+.seg button { min-height: 30px; padding: 4px 10px; border: 0; background: var(--bg); cursor: pointer; color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line-strong); }
+.seg button.active { background: var(--accent); color: var(--accent-ink); }
+.seg button b { font-weight: 600; margin-left: 4px; }
+.status-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; color: var(--muted); font-size: 13px;
+  border-bottom: 1px solid var(--line); }
+.status-line .clear { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; }
+
+/* Table */
+.tablewrap { overflow: auto; }
+table { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; }
+col.c-sev { width: 92px; } col.c-asset { width: 14%; } col.c-loc { width: 15%; } col.c-age { width: 72px; } col.c-state { width: 148px; } col.c-act { width: 188px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; background: var(--panel); position: sticky; top: 0; z-index: 1; }
+th button { background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
+th button.sorted { color: var(--ink); }
+th button.sorted::after { content: " ↓"; } th button.sorted.asc::after { content: " ↑"; }
+tbody tr:hover { background: var(--hover); }
+tbody tr:last-child td { border-bottom: 0; }
+td.sev { white-space: nowrap; font-weight: 600; }
+td.sev .d { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
+td .id { font: 13px var(--mono); font-weight: 600; }
+td .title { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td .type { color: var(--faint); font-size: 12px; }
+td.assetcol { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.loc { font: 12px/1.4 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.age { white-space: nowrap; }
+td.state small { color: var(--faint); display: block; font-size: 12px; margin-top: 2px; }
+.chip { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 7px; border-radius: 10px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+.chip.new { border-color: var(--accent); color: var(--accent); }
+.chip.mitigated { border-color: var(--ok); color: var(--ok); }
+.chip.expiring { border-color: var(--warn); color: var(--warn); }
+.chip.expired, .chip.missing { border-color: var(--danger); color: var(--danger); }
+.chip + .chip { margin-top: 4px; }
+td.state .chip { display: block; width: max-content; }
+td.act { white-space: nowrap; text-align: right; padding-left: 4px; }
+td.act a { display: inline-block; padding: 3px 8px; border-radius: var(--radius); text-decoration: none; font-weight: 550; }
+td.act a:hover { background: var(--hover); }
+td.act a.mit { border: 1px solid var(--accent); }
+td.act a.mit:hover { background: var(--accent); color: var(--accent-ink); }
+td.act .none { color: var(--faint); }
+.empty { padding: 40px 20px; text-align: center; color: var(--muted); }
+.pager { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; color: var(--muted); font-size: 13px; }
+.pager div { display: flex; gap: 6px; }
+
+/* Fixed */
+details.fixed { margin-top: 20px; }
+details.fixed summary { cursor: pointer; padding: 12px 14px; font-weight: 600; list-style: none; display: flex; justify-content: space-between; }
+details.fixed summary::-webkit-details-marker { display: none; }
+details.fixed summary small { color: var(--muted); font-weight: 400; }
+details.fixed[open] summary { border-bottom: 1px solid var(--line); }
+.note { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+@media (prefers-reduced-motion: no-preference) { .btn, .asset, .cell, tbody tr { transition: background-color .12s; } }
+@media (max-width: 700px) { .page { padding: 14px; } .cell.group-start { border-left: 0; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="head">
+    <div>
+      <h1>Veracode findings</h1>
+      <p class="meta" id="meta"></p>
+    </div>
+    <nav id="links"></nav>
+  </header>
+
+  <section class="strip" id="strip" aria-label="Risk posture"></section>
+
+  <div class="body">
+    <aside class="panel rail" aria-label="Assets">
+      <header><h2>Assets</h2><small id="asset-count"></small></header>
+      <div class="all"><button class="asset" id="all-assets"><span class="name">All assets</span><span class="count" id="all-count"></span></button></div>
+      <div class="assets" id="assets"></div>
+    </aside>
+
+    <main class="panel">
+      <div class="toolbar">
+        <label class="search"><input id="q" type="search" placeholder="Search ID, title, asset, location, key" aria-label="Search findings"><kbd>/</kbd></label>
+        <div class="seg" id="view" role="group" aria-label="View">
+          <button data-view="all" class="active">All</button>
+          <button data-view="action">Needs action</button>
+          <button data-view="new">New this run</button>
+          <button data-view="mitigated">Mitigated</button>
+        </div>
+        <select id="severity" aria-label="Severity"><option value="">Any severity</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select>
+        <select id="status" aria-label="Status"><option value="">Any status</option><option>New</option><option>Reopened</option><option>Open</option><option>Asset Missing</option></select>
+        <select id="type" aria-label="Finding type"><option value="">Any type</option></select>
+      </div>
+      <div class="status-line"><span id="shown"></span><button class="clear" id="clear" hidden>Clear filters</button></div>
+      <div class="tablewrap">
+        <table>
+          <colgroup><col class="c-sev"><col><col class="c-asset"><col class="c-loc"><col class="c-age"><col class="c-state"><col class="c-act"></colgroup>
+          <thead><tr>
+            <th><button data-sort="severity">Severity</button></th>
+            <th><button data-sort="id">Finding</button></th>
+            <th><button data-sort="asset">Asset</button></th>
+            <th>Location</th>
+            <th><button data-sort="age">Age</button></th>
+            <th>State</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="pager"><span id="page-info"></span><div><button class="btn" id="prev">Previous</button><button class="btn" id="next">Next</button></div></div>
+    </main>
+  </div>
+
+  <details class="fixed panel" id="fixed-wrap">
+    <summary><span>Fixed in the last 30 days</span><small id="fixed-count"></small></summary>
+    <div class="tablewrap"><table><thead><tr><th>Fixed on</th><th>Severity</th><th>Finding</th><th>Asset</th><th>Days open</th><th>Reason</th><th></th></tr></thead><tbody id="fixed-rows"></tbody></table></div>
+  </details>
+  <p class="note" id="note"></p>
+</div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const F = D.findings, C = D.config, SEV = ['Critical', 'High', 'Medium', 'Low'];
+  const $ = id => document.getElementById(id);
+  const PAGE = 100;
+  const state = { q: '', view: 'all', severity: '', status: '', type: '', asset: '', sort: 'severity', asc: false, page: 0 };
+
+  const el = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
+  const https = v => { try { const u = new URL(v); return u.protocol === 'https:' ? u.href : ''; } catch { return ''; } };
+  const link = (label, href, cls) => { const u = https(href); if (!u) return null; const a = el('a', label, cls); a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
+  const sevRank = s => { const i = SEV.indexOf(s); return i < 0 ? 4 : i; };
+  const sevClass = s => SEV.includes(s) ? s.toLowerCase() : '';
+  const needsAction = f => f.status === 'New' || f.status === 'Reopened' || f.mitigation.status === 'Expiring' || f.mitigation.status === 'Expired';
+  const unmitigated = f => !(f.mitigation.status === 'Mitigated' || f.mitigation.status === 'Expiring');
+
+  // Header
+  (() => {
+    const m = $('meta');
+    m.append('Updated ', Object.assign(el('b', C.updated)), ' UTC');
+    if (C.lastRun) { m.append(el('span', '·', 'sep'), 'Last run ', el('b', C.lastRun.when), ': +' + C.lastRun.new + ' new, ' + C.lastRun.reopened + ' reopened, −' + C.lastRun.fixed + ' fixed'); }
+    m.append(el('span', '·', 'sep'), el('b', String(C.assets)), ' assets', el('span', '·', 'sep'), el('b', String(F.length)), ' open findings');
+    const nav = $('links');
+    const add = (label, href, cls) => { const a = el('a', label, 'btn' + (cls ? ' ' + cls : '')); a.href = href; nav.append(a); };
+    add('findings.csv', C.trackRel + '/findings.csv'); add('fixed.csv', C.trackRel + '/fixed.csv'); add('Mitigation rules', C.docsRel);
+    if (C.repoUrl) add('Repository', C.repoUrl);
+    if (!C.repoUrl) $('note').textContent = 'Mitigate links are off: the tracker ran outside GitHub Actions without --repo-url.';
+    else $('note').textContent = 'Mitigate opens a pre-filled issue; an approver adds the "approved" label to record it in mitigations.yml.';
+  })();
+
+  // Posture strip
+  const strip = $('strip');
+  function cell(n, label, opts = {}) {
+    const b = el('button', null, 'cell' + (opts.static ? ' static' : '') + (opts.group ? ' group-start' : ''));
+    const num = el('span', String(n), 'n' + (opts.tone ? ' ' + opts.tone : ''));
+    if (opts.dot) num.prepend(el('i', null, 'd ' + opts.dot));
+    b.append(num, el('span', label, 'l'));
+    if (opts.static) b.disabled = true; else b.onclick = opts.onclick;
+    if (opts.key) b.dataset.key = opts.key;
+    strip.append(b);
+  }
+  const T = C.totals;
+  SEV.forEach(s => cell(T[s] || 0, s + ' open', { dot: sevClass(s), key: 'sev:' + s, onclick: () => set({ severity: state.severity === s ? '' : s, view: 'all' }) }));
+  cell(T.newToday, 'New or reopened', { group: true, key: 'view:new', tone: T.newToday ? 't-' + 'ok' : '', onclick: () => set({ view: state.view === 'new' ? 'all' : 'new' }) });
+  cell(T.mitigated, 'Mitigated', { key: 'view:mitigated', onclick: () => set({ view: state.view === 'mitigated' ? 'all' : 'mitigated' }) });
+  cell(T.expiring, 'Expiring ≤30d', { key: 'mit:Expiring', tone: T.expiring ? 't-warn' : '', onclick: () => set({ view: 'action', q: '' , mit: 'Expiring' }) });
+  cell(T.expired, 'Expired', { key: 'mit:Expired', tone: T.expired ? 't-danger' : '', onclick: () => set({ view: 'action', mit: 'Expired' }) });
+  cell(T.fixed30, 'Fixed, 30 days', { static: true, group: true });
+  cell(T.medianDays === '' ? '–' : T.medianDays + 'd', 'Median age', { static: true });
+
+  // Assets rail
+  const assetMap = new Map();
+  F.forEach(f => { const a = assetMap.get(f.assetKey) || { key: f.assetKey, label: f.assetLabel, n: 0, Critical: 0, High: 0, Medium: 0, Low: 0 }; a.n++; if (SEV.includes(f.severity)) a[f.severity]++; assetMap.set(f.assetKey, a); });
+  const assets = [...assetMap.values()].sort((a, b) => b.Critical - a.Critical || b.High - a.High || b.Medium - a.Medium || b.n - a.n || a.label.localeCompare(b.label));
+  $('asset-count').textContent = assets.length + ' with findings';
+  $('all-count').textContent = String(F.length);
+  $('all-assets').onclick = () => set({ asset: '' });
+  const railBody = $('assets');
+  assets.forEach(a => {
+    const b = el('button', null, 'asset'); b.dataset.key = a.key;
+    b.append(el('span', a.label, 'name'), el('span', String(a.n), 'count'));
+    const bar = el('span', null, 'bar');
+    SEV.forEach(s => { if (a[s]) { const i = el('i', null, sevClass(s)); i.style.flex = String(a[s]); bar.append(i); } });
+    b.append(bar); b.title = SEV.map(s => a[s] + ' ' + s.toLowerCase()).join(', ');
+    b.onclick = () => set({ asset: state.asset === a.key ? '' : a.key });
+    railBody.append(b);
+  });
+
+  // Types
+  const types = [...new Set(F.map(f => f.type).filter(Boolean))].sort();
+  types.forEach(t => $('type').append(el('option', t)));
+
+  // Filtering
+  function filtered() {
+    const q = state.q.trim().toLowerCase();
+    return F.filter(f =>
+      (state.view !== 'action' || needsAction(f)) &&
+      (state.view !== 'new' || f.status === 'New' || f.status === 'Reopened') &&
+      (state.view !== 'mitigated' || !unmitigated(f)) &&
+      (!state.mit || f.mitigation.status === state.mit) &&
+      (!state.severity || f.severity === state.severity) &&
+      (!state.status || f.status === state.status) &&
+      (!state.type || f.type === state.type) &&
+      (!state.asset || f.assetKey === state.asset) &&
+      (!q || f.search.includes(q)));
+  }
+  const sorters = {
+    severity: (a, b) => sevRank(a.severity) - sevRank(b.severity) || b.daysOpen - a.daysOpen,
+    age: (a, b) => b.daysOpen - a.daysOpen || sevRank(a.severity) - sevRank(b.severity),
+    asset: (a, b) => a.assetLabel.localeCompare(b.assetLabel) || sevRank(a.severity) - sevRank(b.severity),
+    id: (a, b) => a.id.localeCompare(b.id),
+  };
+
+  function chip(text, cls) { return el('span', text, 'chip' + (cls ? ' ' + cls : '')); }
+  function row(f) {
+    const tr = el('tr');
+    const sev = el('td', null, 'sev t-' + sevClass(f.severity)); sev.append(el('i', null, 'd ' + sevClass(f.severity)), f.severity); tr.append(sev);
+    const fd = el('td'); fd.append(el('span', f.id, 'id'));
+    if (f.type) fd.append(' ', el('span', f.type, 'type'));
+    if (f.title) { const t = el('span', f.title, 'title'); t.title = f.title; fd.append(t); }
+    tr.append(fd);
+    const as = el('td', f.assetLabel, 'assetcol'); as.title = f.assetLabel; tr.append(as);
+    const loc = el('td', f.location, 'loc'); loc.title = f.location; tr.append(loc);
+    const age = el('td', f.daysOpen >= 0 ? f.daysOpen + 'd' : '', 'age'); if (f.firstSeen) age.title = 'First seen ' + f.firstSeen; tr.append(age);
+    const st = el('td', null, 'state');
+    if (f.status === 'New' || f.status === 'Reopened') st.append(chip(f.status, 'new'));
+    else if (f.status === 'Asset Missing') st.append(chip('Asset missing', 'missing'));
+    const ms = f.mitigation.status;
+    if (ms) {
+      const c = chip(ms + (f.mitigation.id ? ' ' + f.mitigation.id : ''), ms.toLowerCase());
+      c.title = [f.mitigation.type, f.mitigation.expires ? 'expires ' + f.mitigation.expires : ''].filter(Boolean).join(', ');
+      st.append(c);
+      if (f.mitigation.expires && ms !== 'Mitigated') st.append(el('small', (ms === 'Expired' ? 'expired ' : 'expires ') + f.mitigation.expires));
+    }
+    tr.append(st);
+    const act = el('td', null, 'act');
+    const v = link('Veracode ↗', f.veracodeUrl); if (v) act.append(v);
+    const m = link('Mitigate', f.mitigateUrl, 'mit'); if (m) act.append(m);
+    if (!act.childNodes.length) act.append(el('span', '—', 'none'));
+    tr.append(act);
+    return tr;
+  }
+
+  function render() {
+    const data = filtered().sort((a, b) => (state.asc ? -1 : 1) * sorters[state.sort](a, b));
+    const pages = Math.max(1, Math.ceil(data.length / PAGE)); state.page = Math.min(state.page, pages - 1);
+    const start = state.page * PAGE, slice = data.slice(start, start + PAGE);
+    const body = $('rows'); body.replaceChildren(...slice.map(row));
+    if (!data.length) { const td = el('td', F.length ? 'No findings match these filters.' : 'No open findings.', 'empty'); td.colSpan = 7; const tr = el('tr'); tr.append(td); body.append(tr); }
+    const active = !!(state.q || state.view !== 'all' || state.severity || state.status || state.type || state.asset || state.mit);
+    $('shown').textContent = active ? data.length + ' of ' + F.length + ' findings' : F.length + ' findings';
+    $('clear').hidden = !active;
+    $('page-info').textContent = pages > 1 ? 'Page ' + (state.page + 1) + ' of ' + pages + ' · ' + (start + 1) + '–' + Math.min(start + PAGE, data.length) : '';
+    $('prev').disabled = state.page === 0; $('next').disabled = state.page >= pages - 1;
+    $('prev').hidden = $('next').hidden = pages <= 1;
+    // reflect state in controls
+    $('q').value = state.q; $('severity').value = state.severity; $('status').value = state.status; $('type').value = state.type;
+    document.querySelectorAll('#view button').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
+    document.querySelectorAll('.asset').forEach(b => b.classList.toggle('active', (b.dataset.key || '') === state.asset));
+    document.querySelectorAll('.cell[data-key]').forEach(b => {
+      const [k, v] = b.dataset.key.split(':');
+      b.classList.toggle('active', (k === 'sev' && state.severity === v) || (k === 'view' && state.view === v) || (k === 'mit' && state.mit === v));
+    });
+    document.querySelectorAll('th button').forEach(b => { b.classList.toggle('sorted', b.dataset.sort === state.sort); b.classList.toggle('asc', b.dataset.sort === state.sort && state.asc); });
+    const h = new URLSearchParams(); for (const k of ['q', 'view', 'severity', 'status', 'type', 'asset', 'mit']) if (state[k] && !(k === 'view' && state[k] === 'all')) h.set(k, state[k]);
+    const hash = h.toString(); if (hash !== location.hash.slice(1)) history.replaceState(null, '', hash ? '#' + hash : location.pathname);
+  }
+  function set(patch) { if (!('mit' in patch)) patch.mit = ''; Object.assign(state, patch, { page: 0 }); render(); }
+
+  // Wiring
+  $('q').addEventListener('input', e => { state.q = e.target.value; state.page = 0; render(); });
+  $('severity').onchange = e => set({ severity: e.target.value, mit: state.mit });
+  $('status').onchange = e => set({ status: e.target.value, mit: state.mit });
+  $('type').onchange = e => set({ type: e.target.value, mit: state.mit });
+  document.querySelectorAll('#view button').forEach(b => b.onclick = () => set({ view: b.dataset.view }));
+  document.querySelectorAll('th button').forEach(b => b.onclick = () => { if (state.sort === b.dataset.sort) state.asc = !state.asc; else { state.sort = b.dataset.sort; state.asc = false; } render(); });
+  $('clear').onclick = () => set({ q: '', view: 'all', severity: '', status: '', type: '', asset: '' });
+  $('prev').onclick = () => { state.page--; render(); window.scrollTo({ top: 0 }); };
+  $('next').onclick = () => { state.page++; render(); window.scrollTo({ top: 0 }); };
+  document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== $('q')) { e.preventDefault(); $('q').focus(); } });
+
+  // Restore from hash
+  const h = new URLSearchParams(location.hash.slice(1));
+  for (const k of ['q', 'view', 'severity', 'status', 'type', 'asset', 'mit']) if (h.get(k)) state[k] = h.get(k);
+  if (!['all', 'action', 'new', 'mitigated'].includes(state.view)) state.view = 'all';
+
+  // Fixed
+  const fx = D.fixed; $('fixed-count').textContent = fx.length + ' findings';
+  const fb = $('fixed-rows');
+  fx.forEach(f => {
+    const tr = el('tr');
+    tr.append(el('td', f.fixedOn));
+    const s = el('td', null, 'sev t-' + sevClass(f.severity)); s.append(el('i', null, 'd ' + sevClass(f.severity)), f.severity); tr.append(s);
+    const fd = el('td'); fd.append(el('span', f.id, 'id')); if (f.title) { const t = el('span', f.title, 'title'); t.title = f.title; fd.append(t); } tr.append(fd);
+    tr.append(el('td', f.asset), el('td', f.daysOpen >= 0 ? f.daysOpen + 'd' : ''), el('td', f.reason));
+    const a = el('td', null, 'act'); const v = link('Veracode ↗', f.veracodeUrl); if (v) a.append(v); tr.append(a);
+    fb.append(tr);
+  });
+  if (!fx.length) { const td = el('td', 'Nothing fixed in the last 30 days.', 'empty'); td.colSpan = 7; const tr = el('tr'); tr.append(td); fb.append(tr); }
+
+  render();
+})();
+</script>
+</body>
+</html>

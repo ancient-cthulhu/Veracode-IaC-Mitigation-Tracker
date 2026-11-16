@@ -3,12 +3,12 @@
 [English](../MITIGATIONS.md) | Español
 
 La Veracode Platform no tiene mitigaciones para los hallazgos de Container, IaC y Secrets. El
-[seguimiento de hallazgos](README.md) las registra en `mitigations.yml` y las muestra en `FINDINGS.md`,
+[seguimiento de hallazgos](README.md) las registra en `mitigations.yml` y las muestra en el panel interactivo `site/index.html`,
 `tracking/findings.csv` y el informe de Excel.
 
 ## Solicitar y aprobar
 
-1. **Solicitar.** En `FINDINGS.md`, pulsa **Mitigate** en el hallazgo. Se abre una incidencia ya rellenada. Elige
+1. **Solicitar.** En `site/index.html`, pulsa **Mitigate** en el hallazgo. Se abre una incidencia ya rellenada. Elige
    el tipo, escribe el motivo, añade una fecha de caducidad (obligatoria para `accept-risk`) y envíala.
 2. **Aprobar.** Un aprobador (un login de la variable `MITIGATION_APPROVERS`) añade la etiqueta `approved`.
 3. **Listo.** El bot añade la siguiente entrada (`M-0001`, `M-0002`, ...) a `mitigations.yml`, actualiza el panel,
@@ -91,7 +91,7 @@ python tracker/veracode_iac_tracker.py --track tracking --mitigations mitigation
 - Solo los logins de `MITIGATION_APPROVERS` pueden aprobar; cambiar la variable requiere acceso de administrador.
 - Protege `mitigations.yml`, `.github/` y `tracker/` con
   [CODEOWNERS](../../.github/CODEOWNERS) y protección de rama.
-- El texto de la incidencia nunca llega a una shell, y todo lo que se muestra en comentarios y en `FINDINGS.md`
+- El texto de la incidencia nunca llega a una shell, y todo lo que se muestra en comentarios, `FINDINGS.md` y `site/index.html`
   se escapa.
 - La comprobación del pull request usa los módulos del tracker de la rama base, así que un pull request no puede cambiar
   su propia comprobación.

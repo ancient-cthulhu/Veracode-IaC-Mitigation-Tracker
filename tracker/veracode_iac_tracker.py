@@ -356,11 +356,17 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
     run_info = dict(run_info, updated=now.strftime("%Y-%m-%dT%H:%M:%SZ"))
     atomic_write_text(paths["run"], json.dumps(run_info, indent=2, sort_keys=True) + "\n")
     dashboard = args.dashboard or os.path.join(os.path.dirname(os.path.abspath(args.track)), "FINDINGS.md")
+    html_dashboard = args.html_dashboard or os.path.join(
+        os.path.dirname(os.path.abspath(args.track)), "site", "index.html"
+    )
     repo_url = resolve_repo_url(args.repo_url)
     if args.repo_url and not repo_url:
         print("  WARNING: --repo-url must look like https://github.com/<org>/<repo>; Mitigate links left out")
     rel = os.path.relpath(os.path.abspath(args.track), os.path.dirname(os.path.abspath(dashboard)))
-    atomic_write_text(dashboard, render_dashboard(rows, fixed_all, run_info, now, repo_url, rel))
+    html_rel_from_markdown = os.path.relpath(html_dashboard, os.path.dirname(os.path.abspath(dashboard))).replace("\\", "/")
+    atomic_write_text(dashboard, render_dashboard(rows, fixed_all, run_info, now, repo_url, rel, html_rel_from_markdown))
+    html_rel = os.path.relpath(os.path.abspath(args.track), os.path.dirname(os.path.abspath(html_dashboard)))
+    atomic_write_text(html_dashboard, render_html_dashboard(rows, fixed_all, run_info, now, repo_url, html_rel))
     t = track_totals(rows)
     sev = ", ".join(f"{SEVERITY_LABEL[r]} {t[SEVERITY_LABEL[r]]}" for r in (5, 4, 3, 2, 1, 0)
                     if t[SEVERITY_LABEL[r]])
@@ -462,9 +468,11 @@ def dashboard_asset_summary(rows: Iterable[dict]) -> list[dict[str, Any]]:
 
 
 def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
-                     repo_url: str, track_rel: str = "tracking") -> str:
+                     repo_url: str, track_rel: str = "tracking", html_rel: str = "site/index.html") -> str:
     track_rel = track_rel.replace("\\", "/").strip("/")
     track_rel = track_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", track_rel) else "tracking"
+    html_rel = html_rel.replace("\\", "/").strip("/")
+    html_rel = html_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", html_rel) else "site/index.html"
     # docs/ sits next to the tracking folder (the repository root in the template)
     docs_rel = "/".join([p for p in track_rel.split("/")[:-1]] + [MITIGATIONS_DOC])
     today = now.date()
@@ -485,10 +493,11 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
                 " fixed")
     out = ["# Veracode findings", "",
            f"> Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC · Assets: {md_safe(assets)} · Last run: {md_safe(last)}",
+           f"> Interactive dashboard: [{html_rel}]({html_rel}) — every actionable finding keeps its Mitigate link.",
            "> Full data: "
            f"[{track_rel}/findings.csv]({track_rel}/findings.csv) · "
            f"[{track_rel}/fixed.csv]({track_rel}/fixed.csv)",
-           f"> Mitigations: use a Mitigate link below. Rules: [{MITIGATIONS_DOC}]({docs_rel}).",
+           f"> Mitigations: use the interactive dashboard. Rules: [{MITIGATIONS_DOC}]({docs_rel}).",
            "", "## Risk snapshot", "",
            "| Critical | High | Medium | Low | Mitigated | Expiring (≤30d) | Expired | New today | Fixed (7d) "
            "| Fixed (30d) | Median days open |",
@@ -555,6 +564,95 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
         out += lines + [""]
         used += n
     return "\n".join(out)
+
+
+HTML_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+
+
+def _json_for_script(value: Any) -> str:
+    """JSON safe inside <script type=application/json>: no tag or entity characters survive."""
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return (text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
+def _int_or(value: Any, default: int = -1) -> int:
+    s = str(value or "").strip()
+    return int(s) if s.lstrip("-").isdigit() else default
+
+
+def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
+                          repo_url: str, track_rel: str = "../tracking") -> str:
+    """Interactive static dashboard (tracker/dashboard.html + a JSON payload).
+
+    Every finding is in the page with its Veracode and Mitigate links; the page filters client-side.
+    Values are only ever inserted through textContent, and only https URLs are turned into links.
+    """
+    track_rel = track_rel.replace("\\", "/").strip("/")
+    track_rel = track_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", track_rel) else "../tracking"
+    docs_rel = "/".join(track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+    today = now.date()
+    findings = []
+    for row in rows:
+        ms = str(row.get("Mitigation Status") or "")
+        name = str(row.get("Asset Name") or "Unknown asset")
+        f = {
+            "status": str(row.get("Status") or OPEN),
+            "severity": str(row.get("Severity") or "Unknown").title(),
+            "type": str(row.get("Finding Type") or ""),
+            "id": str(row.get("Finding ID") or ""),
+            "title": str(row.get("Title") or ""),
+            "asset": name,
+            "assetId": str(row.get("Asset ID") or ""),
+            "assetKey": asset_key(row.get("Asset ID"), name),
+            "location": str(row.get("Location") or row.get("File Path") or ""),
+            "firstSeen": str(row.get("First Seen") or "")[:10],
+            "daysOpen": _int_or(row.get("Days Open")),
+            "mitigation": {"status": ms, "type": str(row.get("Mitigation Type") or ""),
+                           "id": str(row.get("Mitigation ID") or ""), "expires": str(row.get("Mitigation Expires") or ""),
+                           "ref": str(row.get("Mitigation Ref") or "")},
+            "veracodeUrl": str(row.get("Veracode Link") or ""),
+            "mitigateUrl": "" if ms == "Mitigated" else mitigate_url(repo_url, row),
+            "findingKey": str(row.get("Finding Key") or ""),
+        }
+        f["search"] = " ".join([f["id"], f["title"], name, f["location"], f["findingKey"], f["type"],
+                                f["mitigation"]["id"]]).lower()
+        findings.append(f)
+    keys_by_name: dict[str, set[str]] = {}
+    for f in findings:
+        keys_by_name.setdefault(f["asset"].lower(), set()).add(f["assetKey"])
+    for f in findings:
+        ambiguous = len(keys_by_name[f["asset"].lower()]) > 1 and f["assetId"]
+        f["assetLabel"] = f"{f['asset']} ({f['assetId']})" if ambiguous else f["asset"]
+    fixed_on = [(day_of(r.get("Fixed On")), r) for r in fixed_all]
+    recent = sorted(((d, r) for d, r in fixed_on if d and 0 <= (today - d).days <= 30),
+                    key=lambda dr: (dr[0], severity_rank(dr[1].get("Severity"))), reverse=True)
+    fixed = [{"fixedOn": str(d), "reason": str(r.get("Fixed Reason") or ""), "daysOpen": _int_or(r.get("Days Open")),
+              "severity": str(r.get("Severity") or "Unknown").title(), "id": str(r.get("Finding ID") or ""),
+              "title": str(r.get("Title") or ""), "asset": str(r.get("Asset Name") or ""),
+              "veracodeUrl": str(r.get("Veracode Link") or "")} for d, r in recent]
+    t = track_totals(rows)
+    days = sorted(f["daysOpen"] for f in findings if f["daysOpen"] >= 0)
+    median: Any = ""
+    if days:
+        median = days[len(days) // 2] if len(days) % 2 else (days[len(days) // 2 - 1] + days[len(days) // 2]) / 2
+        median = int(median) if float(median).is_integer() else median
+    last_run = None
+    if run_info.get("run"):
+        last_run = {"when": str(run_info["run"]).replace("T", " ").rstrip("Z"), "new": int(run_info.get("new", 0)),
+                    "reopened": int(run_info.get("reopened", 0)),
+                    "fixed": int(run_info.get("fixed", 0)) + int(run_info.get("removed", 0))}
+    config = {
+        "updated": now.strftime("%Y-%m-%d %H:%M"), "lastRun": last_run,
+        "assets": run_info.get("assets", len({f["assetKey"] for f in findings})),
+        "trackRel": track_rel, "docsRel": docs_rel, "repoUrl": repo_url,
+        "totals": {"Critical": t["Critical"], "High": t["High"], "Medium": t["Medium"], "Low": t["Low"],
+                   "mitigated": t["mitigated"], "expiring": t["expiring"], "expired": t["expired"],
+                   "newToday": t["new today"], "fixed30": len(recent), "medianDays": median},
+    }
+    with open(HTML_TEMPLATE, encoding="utf-8") as fh:
+        template = fh.read()
+    return template.replace("__DATA__", _json_for_script({"findings": findings, "fixed": fixed, "config": config}), 1)
 
 
 def run_track(args: argparse.Namespace, now: dt.datetime, minter: Optional[Callable[[], str]]) -> int:
@@ -1327,6 +1425,8 @@ Exports with finding filters are not supported by this tracker.""")
                         "without calling Veracode.")
     g.add_argument("--dashboard", metavar="FILE",
                    help="With --track: where to write the Markdown dashboard (default FINDINGS.md next to DIR).")
+    g.add_argument("--html-dashboard", metavar="FILE",
+                   help="With --track: where to write the interactive HTML dashboard (default site/index.html next to DIR).")
     g.add_argument("--repo-url", metavar="URL",
                    help="With --track: https://github.com/<org>/<repo>, for the Mitigate links in the dashboard. "
                         "Default: from GITHUB_SERVER_URL and GITHUB_REPOSITORY in GitHub Actions.")
