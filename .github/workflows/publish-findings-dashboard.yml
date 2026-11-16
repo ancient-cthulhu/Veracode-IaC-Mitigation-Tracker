@@ -1,5 +1,6 @@
-# Publishes site/index.html (the optional HTML dashboard) to GitHub Pages after each tracker or mitigation run.
-# Opt-in with the repository variable ENABLE_FINDINGS_PAGES=true and Settings > Pages > Source: GitHub Actions.
+# Publishes site/index.html (the optional HTML dashboard) to GitHub Pages after a tracker or mitigation run
+# that changed it. Opt-in with the repository variable ENABLE_FINDINGS_PAGES=true and
+# Settings > Pages > Source: GitHub Actions.
 # Only for GitHub Enterprise Cloud with Pages visibility set to private: on other plans Pages is public.
 # Only the page is published; its CSV and docs links point back to the repository, which needs repository access.
 name: Publish findings dashboard
@@ -12,42 +13,64 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: findings-dashboard-pages
   cancel-in-progress: true
 
 jobs:
-  publish:
+  check:
+    # Cheap check: did the run that just finished change site/? Mitigation runs on unrelated issues, pull
+    # request checks and runs without changes stop here. A manual run always publishes.
     if: >-
       vars.ENABLE_FINDINGS_PAGES == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event != 'pull_request' &&
         github.event.workflow_run.head_branch == github.event.repository.default_branch))
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.changed.outputs.deploy }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.repository.default_branch || github.ref_name }}
           persist-credentials: false
-
-      - name: Check the dashboard exists
+          fetch-depth: 50
+      - id: changed
+        env:
+          BEFORE: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [ ! -f site/index.html ]; then
             echo "::error::site/index.html not found. Run the Veracode findings tracker once with ENABLE_FINDINGS_PAGES=true."
             exit 1
           fi
+          if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null && git diff --quiet "$BEFORE" HEAD -- site; then
+            echo "site/ did not change. Nothing to publish." >> "$GITHUB_STEP_SUMMARY"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
 
+  publish:
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          persist-credentials: false
       - uses: actions/configure-pages@v5
-
       - uses: actions/upload-pages-artifact@v4
         with:
           path: site
-
       - id: deployment
         uses: actions/deploy-pages@v4

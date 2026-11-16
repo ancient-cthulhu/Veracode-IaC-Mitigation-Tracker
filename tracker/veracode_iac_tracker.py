@@ -99,7 +99,7 @@ ASSET_MISSING_DAYS = 30
 TRACK_MITIGATION_COLUMNS = ["Mitigation Status", "Mitigation Type", "Mitigation Reason", "Mitigation Approved By",
                             "Mitigation Expires", "Mitigation Ref"]
 TRACK_COLUMNS = ["Status", "Severity", "Finding Type", "Finding ID", "Title", "Asset Name", "Location",
-                 "Fixed Versions", "First Seen", "Last Seen", "Days Open", *TRACK_MITIGATION_COLUMNS,
+                 "Fixed Versions", "First Seen", "Last Seen", *TRACK_MITIGATION_COLUMNS,
                  "Veracode Link", "Asset ID", "Finding Key", "Mitigation ID", "File Path", "Scan Type", "Scan ID",
                  "Scan Date", "Detected On", "Reopened On", "Asset Missing Since",
                  # context for people and for the mitigation request comment
@@ -163,6 +163,13 @@ def fixed_entry(old: dict[str, Any], fixed_on: str, reason: str, scan_id: str = 
     return row
 
 
+def same_scan(old: dict[str, Any], cur: dict[str, Any]) -> bool:
+    a, b = str(old.get("Scan ID") or ""), str(cur.get("Scan ID") or "")
+    if a or b:
+        return a == b
+    return str(old.get("Scan Date") or "") == str(cur.get("Scan Date") or "")
+
+
 def update_lifecycle(baseline: list[dict], fixed_log: list[dict], current: list[dict],
                      scanned: dict[tuple[str, str], tuple[str, str]], known_assets: set[str], today: dt.date,
                      seed: Optional[dict[str, str]] = None) -> tuple[list[dict], list[dict], Counter]:
@@ -191,7 +198,8 @@ def update_lifecycle(baseline: list[dict], fixed_log: list[dict], current: list[
         if old is not None:
             for c in ("First Seen", "Detected On", "Reopened On"):
                 row[c] = old.get(c, "")
-            fresh = old.get("Status") in (NEW, REOPENED) and old.get("Detected On") == today_s
+            # New and Reopened findings stay so until a newer scan of their asset
+            fresh = old.get("Status") in (NEW, REOPENED) and same_scan(old, cur)
             row["Status"] = old["Status"] if fresh else OPEN
         elif ident in was_fixed or legacy in was_fixed:
             gone = was_fixed.get(ident) or was_fixed[legacy]
@@ -361,7 +369,7 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
     if err:
         print(f"error: {err}", file=sys.stderr)
         return 1
-    run_info = dict(run_info, updated=now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    run_info = {k: v for k, v in run_info.items() if k != "updated"}
     atomic_write_text(paths["run"], json.dumps(run_info, indent=2, sort_keys=True) + "\n")
     dashboard = args.dashboard or os.path.join(os.path.dirname(os.path.abspath(args.track)), "FINDINGS.md")
     dash_dir = os.path.dirname(os.path.abspath(dashboard))
@@ -578,6 +586,19 @@ def _asset_rows_md(assets: list[dict], link_prefix: str, show_team: bool) -> lis
     return out
 
 
+def latest_scan(rows: Iterable[dict]) -> str:
+    return max((str(r.get("Scan Date") or r.get("Last Seen") or "")[:10] for r in rows), default="")
+
+
+def last_change(run_info: dict) -> str:
+    """Date and counts of the last run that found something new or fixed."""
+    if not run_info.get("run"):
+        return "none yet"
+    fixed = int(run_info.get("fixed", 0) or 0) + int(run_info.get("removed", 0) or 0)
+    return (f"{str(run_info['run'])[:10]}, +{run_info.get('new', 0)} new, {run_info.get('reopened', 0)} reopened, "
+            f"-{fixed} fixed")
+
+
 def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
                      repo_url: str, track_rel: str = "tracking", pages_rel: str = "findings",
                      html_rel: str = "") -> str:
@@ -592,20 +613,10 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
     fixed_on = [(day_of(r.get("Fixed On")), r) for r in fixed_all]
     recent = sorted(((d, r) for d, r in fixed_on if d and 0 <= (today - d).days <= 30),
                     key=lambda dr: (dr[0], severity_rank(dr[1].get("Severity"))), reverse=True)
-    days = sorted(int(r["Days Open"]) for r in rows if str(r.get("Days Open", "")).lstrip("-").isdigit())
-    median = "" if not days else (days[len(days) // 2] if len(days) % 2 else
-                                  (days[len(days) // 2 - 1] + days[len(days) // 2]) / 2)
-    if isinstance(median, float) and median.is_integer():
-        median = int(median)
     assets = asset_table(rows)
-    last = "never (offline only)"
-    if run_info.get("run"):
-        last = (f"{str(run_info['run']).replace('T', ' ').rstrip('Z')} UTC, +{run_info.get('new', 0)} new, "
-                f"{run_info.get('reopened', 0)} reopened, -{int(run_info.get('fixed', 0)) + int(run_info.get('removed', 0))}"
-                " fixed")
     out = ["# Veracode findings", "",
-           f"> Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC · Assets: {len(assets)} · Open findings: {len(rows)} · "
-           f"Last run: {md_safe(last)}",
+           f"> Latest scan: {md_safe(latest_scan(rows) or 'none')} · Assets: {len(assets)} · Open findings: {len(rows)} · "
+           f"Last change: {md_safe(last_change(run_info))}",
            ">",
            f"> Every finding, with its Veracode and Mitigate links, is on its asset page under `{pages_rel}/`. "
            f"Full data: [{track_rel}/findings.csv]({track_rel}/findings.csv) · "
@@ -613,12 +624,11 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
            ">",
            f"> Mitigations: click **Mitigate** on a finding. Rules: [{MITIGATIONS_DOC}]({docs_rel}).",
            "", "## Risk snapshot", "",
-           "| Critical | High | Medium | Low | Mitigated | Expiring (≤30d) | Expired | New or reopened | Fixed (7d) "
-           "| Fixed (30d) | Median days open |",
-           "|" + " --- |" * 11,
+           "| Critical | High | Medium | Low | Mitigated | Expiring (≤30d) | Expired | New or reopened | Fixed (30d) |",
+           "|" + " --- |" * 9,
            f"| {t['Critical']} | {t['High']} | {t['Medium']} | {t['Low']} | {t['mitigated']} | {t['expiring']} | "
-           f"{t['expired']} | {t['new today']} | {sum(1 for d, _ in recent if (today - d).days <= 7)} | "
-           f"{len(recent)} | {median} |", ""]
+           f"{t['expired']} | {t['new today']} | {len(recent)} |", "",
+           "_Open findings include New ones: a finding is New until its asset is scanned again._", ""]
     if not repo_url:
         out += ["_Mitigate links are off: run in GitHub Actions or pass --repo-url._", ""]
     cell = _row_cell(repo_url)
@@ -628,7 +638,7 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
     action = needs_action(rows)
     out += [f"## Needs action ({len(action)})", "",
             "_New or reopened findings and mitigations that expire within 30 days or already expired._", ""]
-    cols = ["Why", "Severity", "Finding ID", "Title", "Asset"] + (["Team"] if show_team else []) + ["Days Open", "Links"]
+    cols = ["Why", "Severity", "Finding ID", "Title", "Asset"] + (["Team"] if show_team else []) + ["First Seen", "Links"]
     lines, _ = dashboard_table(cols, action, cell, DASHBOARD_LIMIT // 3,
                                f"The rest are on the team and asset pages under {pages_rel}/.")
     out += lines + [""]
@@ -662,7 +672,7 @@ def render_asset_pages(rows: list[dict], now: dt.datetime, repo_url: str,
     dashboard_rel = _rel_ok(dashboard_rel, "../FINDINGS.md")
     cell = _row_cell(repo_url)
     pages: dict[str, str] = {}
-    cols = ["Status", "Severity", "Finding ID", "Title", "Location", "Days Open", "Mitigation", "Links"]
+    cols = ["Status", "Severity", "Finding ID", "Title", "Location", "First Seen", "Mitigation", "Links"]
     for a in asset_table(rows):
         group = _by_asset(rows)[a["key"]]
         open_rows = sorted((r for r in group if r.get("Mitigation Status") not in ("Mitigated", "Expiring")), key=_sort_key)
@@ -672,7 +682,7 @@ def render_asset_pages(rows: list[dict], now: dt.datetime, repo_url: str,
         names = [a["slug"] + ("" if i == 0 else f"-{i + 1}") + ".md" for i in range(len(chunks))]
         for i, chunk in enumerate(chunks):
             out = [ASSET_PAGE_MARKER, f"# {md_safe(a['name'], 200)}", "",
-                   f"[← Dashboard]({dashboard_rel}) · Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC"
+                   f"[← Dashboard]({dashboard_rel})"
                    + (f" · Team: [{md_safe(a['team'], 80)}]({team_slug(a['team'])}.md)" if a["team"] else "")
                    + (f" · Asset ID: `{md_safe(a['id'])}`" if a["id"] else ""), ""]
             if len(chunks) > 1:
@@ -713,14 +723,14 @@ def render_team_pages(rows: list[dict], now: dt.datetime, repo_url: str,
         mine = [r for r in rows if r.get("Team") == t["team"]]
         action = needs_action(mine)
         out = [ASSET_PAGE_MARKER, f"# Team: {md_safe(t['team'], 80)}", "",
-               f"[← Dashboard]({dashboard_rel}) · Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC", "",
+               f"[← Dashboard]({dashboard_rel})", "",
                "| Assets | Findings | Critical | High | Medium | Low | Mitigated | Needs action |", "|" + " --- |" * 8,
                f"| {t['Assets']} | {t['Findings']} | {t['Critical']} | {t['High']} | {t['Medium']} | {t['Low']} | "
                f"{t['Mitigated']} | {len(action)} |", ""]
         if not repo_url:
             out += ["_Mitigate links are off: run in GitHub Actions or pass --repo-url._", ""]
         out += [f"## Needs action ({len(action)})", ""]
-        lines, _ = dashboard_table(["Why", "Severity", "Finding ID", "Title", "Asset", "Days Open", "Links"], action,
+        lines, _ = dashboard_table(["Why", "Severity", "Finding ID", "Title", "Asset", "First Seen", "Links"], action,
                                    cell, DASHBOARD_LIMIT // 2, "The rest are on the asset pages below.")
         out += lines + ["", f"## Assets ({t['Assets']})", ""]
         out += _asset_rows_md([a for a in assets if a["team"] == t["team"]], "", False)
@@ -796,7 +806,6 @@ def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dic
             "team": str(row.get("Team") or ""),
             "location": str(row.get("Location") or row.get("File Path") or ""),
             "firstSeen": str(row.get("First Seen") or "")[:10],
-            "daysOpen": _int_or(row.get("Days Open")),
             "mitigation": {"status": ms, "type": str(row.get("Mitigation Type") or ""),
                            "id": str(row.get("Mitigation ID") or ""), "expires": str(row.get("Mitigation Expires") or ""),
                            "ref": str(row.get("Mitigation Ref") or "")},
@@ -821,23 +830,18 @@ def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dic
               "title": str(r.get("Title") or ""), "asset": str(r.get("Asset Name") or ""),
               "veracodeUrl": str(r.get("Veracode Link") or "")} for d, r in recent]
     t = track_totals(rows)
-    days = sorted(f["daysOpen"] for f in findings if f["daysOpen"] >= 0)
-    median: Any = ""
-    if days:
-        median = days[len(days) // 2] if len(days) % 2 else (days[len(days) // 2 - 1] + days[len(days) // 2]) / 2
-        median = int(median) if float(median).is_integer() else median
     last_run = None
     if run_info.get("run"):
-        last_run = {"when": str(run_info["run"]).replace("T", " ").rstrip("Z"), "new": int(run_info.get("new", 0)),
+        last_run = {"when": str(run_info["run"])[:10], "new": int(run_info.get("new", 0)),
                     "reopened": int(run_info.get("reopened", 0)),
                     "fixed": int(run_info.get("fixed", 0)) + int(run_info.get("removed", 0))}
     config = {
-        "updated": now.strftime("%Y-%m-%d %H:%M"), "lastRun": last_run,
+        "latestScan": latest_scan(rows), "lastRun": last_run,
         "assets": run_info.get("assets", len({f["assetKey"] for f in findings})),
         "trackRel": track_rel, "docsRel": docs_rel, "repoUrl": repo_url,
         "totals": {"Critical": t["Critical"], "High": t["High"], "Medium": t["Medium"], "Low": t["Low"],
                    "mitigated": t["mitigated"], "expiring": t["expiring"], "expired": t["expired"],
-                   "newToday": t["new today"], "fixed30": len(recent), "medianDays": median},
+                   "newToday": t["new today"], "fixed30": len(recent)},
     }
     with open(HTML_TEMPLATE, encoding="utf-8") as fh:
         template = fh.read()
@@ -861,18 +865,29 @@ def run_track(args: argparse.Namespace, now: dt.datetime, minter: Optional[Calla
         rules, notes, rc = load_rules_for_run(args.mitigations, now.date())
         if rules is None:
             return rc
+    prev_info = read_json_file(paths["run"])
     if args.offline:  # refresh the derived columns only; no Veracode access
-        return finish_track(args, paths, sort_track_rows(baseline), fixed_log, [], Counter(),
-                            read_json_file(paths["run"]), now, rules, notes)
+        return finish_track(args, paths, sort_track_rows(baseline), fixed_log, [], Counter(), prev_info, now,
+                            rules, notes)
+    # Same latest scans as the last run: nothing new to read. Not when an asset is missing (its 30-day
+    # countdown needs a full run) or when migrating.
+    skip_if = prev_info.get("scans") if not (args.migrate or args.output or any(
+        r.get("Status") == ASSET_MISSING for r in baseline)) else None
     try:
         scans, found, failures = vx.collect_latest(
             args.base_url, args.link_base, asset=args.asset, exclude_asset=args.exclude_asset,
             scan_type=args.scan_type, asset_type=args.asset_type, scanned_by=args.scanned_by, policy=args.policy,
             since=args.since, until=args.until, workers=args.max_workers, rps=args.rps,
-            max_attempts=args.max_attempts, timeout=args.timeout, ca_cert=args.ca_cert, minter=minter, now=now)
+            max_attempts=args.max_attempts, timeout=args.timeout, ca_cert=args.ca_cert, minter=minter, now=now,
+            unchanged=skip_if)
     except ExtractError as exc:
         print(f"error: {exc}" + ("\nNothing was changed." if exc.exit_code == 1 else ""), file=sys.stderr)
         return exc.exit_code
+    digest = vx.scans_digest(r.get("Scan ID") for r in scans if r.get("_picked"))
+    if found is None:
+        print("No asset was scanned again since the last run: findings not read; mitigations and teams refreshed.")
+        return finish_track(args, paths, sort_track_rows(baseline), fixed_log, [], Counter(), prev_info, now,
+                            rules, notes)
     current = [tracker_row(fr) for fr in found]
     # -o: every column except the raw code, which can hold the secret itself
     full = [{k: v for k, v in fr.items() if k != "Code Lines"} for fr in found] if args.output else []
@@ -902,7 +917,10 @@ def run_track(args: argparse.Namespace, now: dt.datetime, minter: Optional[Calla
         notes = more
     rows, fixed_new, counts = update_lifecycle(baseline, fixed_log, current, scanned, known, now.date(), seed)
     run_info = {"run": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "assets": len({a for a, _ in scanned}),
-                **{k: counts[k] for k in ("new", "reopened", "fixed", "removed")}}
+                "scans": digest, **{k: counts[k] for k in ("new", "reopened", "fixed", "removed")}}
+    if prev_info.get("run") and not any(counts[k] for k in ("new", "reopened", "fixed", "removed")):
+        # nothing new or fixed: keep the date and counts of the last change, so the files stay the same
+        run_info.update({k: prev_info.get(k, 0) for k in ("run", "new", "reopened", "fixed", "removed")})
     rc = finish_track(args, paths, rows, fixed_log, fixed_new, counts, run_info, now, rules, notes)
     if rc == 0 and args.output:
         rc = write_track_report(args, rows, full)
@@ -1589,8 +1607,9 @@ def render_issue_details(key: str, asset: str, open_rows: list[dict], fixed_rows
         out += [f"> [!NOTE]\n> Already fixed on {md_safe(fixed.get('Fixed On'))} ({md_safe(fixed.get('Fixed Reason'))}). "
                 "A mitigation is probably not needed.", ""]
     status = md_safe(r.get("Status") or "Fixed")
-    if r.get("Days Open") not in (None, ""):
-        status += f", open {md_safe(r.get('Days Open'))} days"
+    first = day_of(r.get("First Seen"))
+    if first and not fixed:
+        status += f", open {(today - first).days} days"
     if r.get("First Seen"):
         status += f" (first seen {md_safe(r.get('First Seen'))})"
     scan = " · ".join(md_safe(x) for x in (str(r.get("Scan Type") or "").title(), str(r.get("Scan Date") or "")[:10])
@@ -1742,7 +1761,7 @@ Exports with finding filters are not supported by this tracker.""")
                         "Fixed findings of the latest scan per asset. Scan filters apply; finding filters are "
                         "refused. Any failed request changes nothing (exit 1).")
     g.add_argument("--offline", action="store_true",
-                   help="With --track: refresh Days Open and the Mitigation columns from the existing baseline, "
+                   help="With --track: refresh the Mitigation and Team columns and the reports from the existing baseline, "
                         "without calling Veracode.")
     g.add_argument("--dashboard", metavar="FILE",
                    help="With --track: where to write the Markdown dashboard (default FINDINGS.md next to DIR).")
