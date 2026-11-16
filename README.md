@@ -14,7 +14,7 @@ Tracks Veracode Container, IaC, and Secrets findings over time. Use the template
 
 ## What it creates
 
-- `FINDINGS.md`: dashboard with finding status and Mitigate links.
+- `FINDINGS.md`: dashboard with finding status and Mitigate links. Large new or open sets are summarized by asset and severity; the CSV keeps the full list.
 - `tracking/findings.csv`: open findings.
 - `tracking/fixed.csv`: resolved findings.
 - `mitigations.yml`: approved mitigation rules.
