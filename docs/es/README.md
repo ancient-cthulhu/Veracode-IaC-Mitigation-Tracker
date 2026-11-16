@@ -36,6 +36,7 @@ Cada cambio es un commit (`Daily findings: +2 new, -1 fixed`), así que el histo
 | `tracking/findings.csv` | Hallazgos abiertos: estado, severidad, ubicación, First Seen, Days Open, mitigación |
 | `tracking/fixed.csv` | Hallazgos corregidos, con Fixed On y Days Open |
 | `mitigations.yml` | Mitigaciones aprobadas. Consulta [MITIGATIONS.md](MITIGATIONS.md) |
+| `teams.yml` | Opcional: equipos y los patrones de assets que les pertenecen. Añade la columna Team, la tabla Teams, una página por equipo y el filtro por equipo |
 | `tracker/` | Seguimiento, cliente de API de Veracode y utilidades de salida |
 
 `FINDINGS.md`, `findings/` y `tracking/` se crean en la primera ejecución. Cada ejecución adjunta además un informe completo
@@ -65,6 +66,8 @@ ejecución correcta). Si la protección de rama rechaza el push, la actualizaci�
 | `--check-mitigations ARCHIVO` | Valida y lista las reglas, y termina. `--against BASE` muestra los cambios respecto a otro archivo |
 | `--dashboard ARCHIVO` | Ruta del panel (por defecto `FINDINGS.md` junto a `DIR`) |
 | `--asset-pages DIR` | Carpeta de las páginas por asset (por defecto `findings/` junto al panel) |
+| `--teams ARCHIVO` | `teams.yml` con los equipos (si no existe, no hay equipos) |
+| `--describe-issue ISSUE_JSON` | Imprime el comentario con los detalles del hallazgo de una solicitud de mitigación (lo usa el workflow) |
 | `--html-dashboard ARCHIVO` | Además escribe un panel HTML (para GitHub Pages en GitHub Enterprise Cloud, donde puede ser privado) |
 | `--repo-url URL` | `https://github.com/<org>/<repo>` para los enlaces Mitigate (se detecta en GitHub Actions) |
 | `--migrate CSV_ANTIGUO` | Importa las mitigaciones de un `veracode-findings.csv` (automático si está junto a `DIR`) |

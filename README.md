@@ -31,6 +31,19 @@ Everything renders on GitHub, so repository permissions decide who sees it.
 
 Optional HTML dashboard (search, filters, asset drill-down) for organizations on GitHub Enterprise Cloud, where GitHub Pages can be private: enable **Settings → Pages → GitHub Actions** and add the repository variable `ENABLE_FINDINGS_PAGES=true`. On other plans Pages is public, so leave it off.
 
+## Teams (optional)
+
+List who owns which assets in [`teams.yml`](teams.yml):
+
+```yaml
+payments:
+  - acme/payments-*
+platform:
+  - acme/terraform-*
+```
+
+The next run adds a Team column, a **Teams** table in `FINDINGS.md`, one page per team (what needs action plus the team's assets), and a Team filter in the HTML dashboard. First match wins; unmatched assets show as "No team".
+
 ## Files
 
 | File | Purpose |
@@ -40,11 +53,12 @@ Optional HTML dashboard (search, filters, asset drill-down) for organizations on
 | `tracking/findings.csv` | Current open findings. |
 | `tracking/fixed.csv` | Findings resolved by a later scan. |
 | `mitigations.yml` | Approved mitigation rules. |
+| `teams.yml` | Optional: teams and the asset patterns they own. |
 | `tracker/` | Tracker, Veracode client, report writers, optional HTML template. |
 
 ## Mitigations
 
-A developer clicks **Mitigate** on a finding (in `FINDINGS.md` or the asset page) and submits the pre-filled GitHub issue. A login listed in `MITIGATION_APPROVERS` adds the `approved` label. The workflow validates the request, writes a rule to `mitigations.yml`, refreshes the report, and closes the issue.
+A developer clicks **Mitigate** on a finding (in `FINDINGS.md`, a team page or the asset page) and submits the pre-filled GitHub issue. The bot immediately comments the finding's details: severity, file and line, resource, fixed versions, description, suggested fix, the scan it came from, a Veracode link, and how many other assets have the same finding. A login listed in `MITIGATION_APPROVERS` adds the `approved` label. The workflow validates the request, writes a rule to `mitigations.yml`, refreshes the report, and closes the issue.
 
 See [Mitigations](docs/MITIGATIONS.md) for rule fields, expiry handling, scopes, and examples.
 

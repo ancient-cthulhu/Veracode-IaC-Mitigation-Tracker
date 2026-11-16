@@ -10,6 +10,8 @@ The Veracode Platform has no mitigations for Container, IaC and Secrets findings
 
 1. **Request.** Click **Mitigate** on the finding in `FINDINGS.md` or its asset page. A pre-filled issue opens. Pick the type, write
    the reason, add an expiry date (required for `accept-risk`) and submit.
+   The bot comments the finding's details (file, resource, scan, Veracode link, description, other assets with the
+   same Finding ID) so the approver has the context.
 2. **Approve.** An approver (a login in the variable `MITIGATION_APPROVERS`) adds the label `approved`.
 3. **Done.** The bot adds the next entry (`M-0001`, `M-0002`, ...) to `mitigations.yml`, updates the dashboard,
    comments "Approved as M-0001, applied to 1 finding(s)" and closes the issue.
