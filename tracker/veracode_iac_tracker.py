@@ -784,11 +784,15 @@ def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dic
     track_rel = track_rel.replace("\\", "/").strip("/")
     track_rel = track_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", track_rel) else "../tracking"
     docs_rel = "/".join(track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+    rules_rel = "/".join(track_rel.split("/")[:-1] + ["mitigations.yml"])
     repo_track_rel = _rel_ok(repo_track_rel, "") if repo_track_rel else ""
     if repo_url and repo_track_rel and not repo_track_rel.startswith(".."):
         base = f"{repo_url}/blob/HEAD/"
         docs_rel = base + "/".join(repo_track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+        rules_rel = base + "/".join(repo_track_rel.split("/")[:-1] + ["mitigations.yml"])
         track_rel = base + repo_track_rel
+    # every approved request, newest first
+    approved_url = (f"{repo_url}/issues?q=" + "is%3Aissue+label%3Amitigation-request+label%3Aapproved") if repo_url else ""
     today = now.date()
     findings = []
     for row in rows:
@@ -838,7 +842,8 @@ def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dic
     config = {
         "latestScan": latest_scan(rows), "lastRun": last_run,
         "assets": run_info.get("assets", len({f["assetKey"] for f in findings})),
-        "trackRel": track_rel, "docsRel": docs_rel, "repoUrl": repo_url,
+        "trackRel": track_rel, "docsRel": docs_rel, "repoUrl": repo_url, "rulesUrl": rules_rel,
+        "approvedUrl": approved_url,
         "totals": {"Critical": t["Critical"], "High": t["High"], "Medium": t["Medium"], "Low": t["Low"],
                    "mitigated": t["mitigated"], "expiring": t["expiring"], "expired": t["expired"],
                    "newToday": t["new today"], "fixed30": len(recent)},

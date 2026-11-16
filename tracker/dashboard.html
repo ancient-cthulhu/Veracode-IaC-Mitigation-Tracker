@@ -102,6 +102,10 @@ button, input, select { font: inherit; color: inherit; }
 .status-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; color: var(--muted); font-size: 13px;
   border-bottom: 1px solid var(--line); }
 .status-line .clear { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; }
+.status-line .mit-links { margin-left: auto; }
+.status-line .mit-links a { margin-left: 12px; }
+a.chip { text-decoration: none; }
+a.chip:hover { text-decoration: underline; }
 
 /* Table */
 .tablewrap { overflow: auto; }
@@ -185,7 +189,7 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
         <select id="status" aria-label="Status"><option value="">All open</option><option value="New">New (not rescanned yet)</option><option>Reopened</option><option value="Open">Seen in a later scan</option><option>Asset Missing</option></select>
         <select id="type" aria-label="Finding type"><option value="">Any type</option></select>
       </div>
-      <div class="status-line"><span id="shown"></span><button class="clear" id="clear" hidden>Clear filters</button></div>
+      <div class="status-line"><span id="shown"></span><span id="mit-links" class="mit-links" hidden></span><button class="clear" id="clear" hidden>Clear filters</button></div>
       <div class="tablewrap">
         <table>
           <colgroup><col class="c-sev"><col><col class="c-asset"><col class="c-loc"><col class="c-age"><col class="c-state"><col class="c-act"></colgroup>
@@ -341,8 +345,12 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     else if (f.status === 'Asset Missing') st.append(chip('Asset missing', 'missing'));
     const ms = f.mitigation.status;
     if (ms) {
-      const c = chip(ms + (f.mitigation.id ? ' ' + f.mitigation.id : ''), ms.toLowerCase());
+      // the chip links to the approved issue when there is one
+      const issue = https(f.mitigation.ref);
+      const c = issue ? link(ms + (f.mitigation.id ? ' ' + f.mitigation.id : ''), issue, 'chip ' + ms.toLowerCase())
+                      : chip(ms + (f.mitigation.id ? ' ' + f.mitigation.id : ''), ms.toLowerCase());
       c.title = [f.mitigation.type, f.mitigation.expires ? 'expires ' + f.mitigation.expires : ''].filter(Boolean).join(', ');
+      if (issue) c.title = (c.title ? c.title + ' · ' : '') + 'open the approved request';
       st.append(c);
       if (f.mitigation.expires && ms !== 'Mitigated') st.append(el('small', (ms === 'Expired' ? 'expired ' : 'expires ') + f.mitigation.expires));
     }
@@ -350,6 +358,7 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     const act = el('td', null, 'act');
     const v = link('Veracode ↗', f.veracodeUrl); if (v) act.append(v);
     const m = link('Mitigate', f.mitigateUrl, 'mit'); if (m) act.append(m);
+    if (!m && f.mitigation.status) { const r = link('Approval ↗', f.mitigation.ref); if (r) act.append(r); }
     if (!act.childNodes.length) act.append(el('span', '—', 'none'));
     tr.append(act);
     return tr;
@@ -364,6 +373,14 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
     const active = !!(state.q || state.view !== 'all' || state.severity || state.status || state.type || state.team || state.asset || state.mit);
     $('shown').textContent = active ? data.length + ' of ' + F.length + ' findings' : F.length + ' findings';
     $('clear').hidden = !active;
+    // Mitigated view: where to find every approval and the rules
+    const ml = $('mit-links'), showMit = state.view === 'mitigated' || !!state.mit;
+    ml.hidden = !showMit;
+    if (showMit && !ml.childNodes.length) {
+      const a = link('All approved requests ↗', C.approvedUrl); if (a) ml.append(a);
+      const r = el('a', 'Rules (mitigations.yml)'); r.href = C.rulesUrl; ml.append(r);
+      const d = el('a', 'How to renew or revoke'); d.href = C.docsRel; ml.append(d);
+    }
     $('page-info').textContent = pages > 1 ? 'Page ' + (state.page + 1) + ' of ' + pages + ' · ' + (start + 1) + '–' + Math.min(start + PAGE, data.length) : '';
     $('prev').disabled = state.page === 0; $('next').disabled = state.page >= pages - 1;
     $('prev').hidden = $('next').hidden = pages <= 1;
