@@ -356,17 +356,24 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
     run_info = dict(run_info, updated=now.strftime("%Y-%m-%dT%H:%M:%SZ"))
     atomic_write_text(paths["run"], json.dumps(run_info, indent=2, sort_keys=True) + "\n")
     dashboard = args.dashboard or os.path.join(os.path.dirname(os.path.abspath(args.track)), "FINDINGS.md")
-    html_dashboard = args.html_dashboard or os.path.join(
-        os.path.dirname(os.path.abspath(args.track)), "site", "index.html"
-    )
+    dash_dir = os.path.dirname(os.path.abspath(dashboard))
+    pages_dir = args.asset_pages or os.path.join(dash_dir, "findings")
     repo_url = resolve_repo_url(args.repo_url)
     if args.repo_url and not repo_url:
         print("  WARNING: --repo-url must look like https://github.com/<org>/<repo>; Mitigate links left out")
-    rel = os.path.relpath(os.path.abspath(args.track), os.path.dirname(os.path.abspath(dashboard)))
-    html_rel_from_markdown = os.path.relpath(html_dashboard, os.path.dirname(os.path.abspath(dashboard))).replace("\\", "/")
-    atomic_write_text(dashboard, render_dashboard(rows, fixed_all, run_info, now, repo_url, rel, html_rel_from_markdown))
-    html_rel = os.path.relpath(os.path.abspath(args.track), os.path.dirname(os.path.abspath(html_dashboard)))
-    atomic_write_text(html_dashboard, render_html_dashboard(rows, fixed_all, run_info, now, repo_url, html_rel))
+    rel = os.path.relpath(os.path.abspath(args.track), dash_dir).replace("\\", "/")
+    pages_rel = os.path.relpath(os.path.abspath(pages_dir), dash_dir).replace("\\", "/")
+    html_rel = ""
+    if args.html_dashboard:
+        html_rel = os.path.relpath(os.path.abspath(args.html_dashboard), dash_dir).replace("\\", "/")
+    atomic_write_text(dashboard, render_dashboard(rows, fixed_all, run_info, now, repo_url, rel, pages_rel, html_rel))
+    back = os.path.relpath(os.path.abspath(dashboard), os.path.abspath(pages_dir)).replace("\\", "/")
+    n_pages = write_asset_pages(pages_dir, render_asset_pages(rows, now, repo_url, back))
+    if args.html_dashboard:
+        html_track = os.path.relpath(os.path.abspath(args.track),
+                                     os.path.dirname(os.path.abspath(args.html_dashboard))).replace("\\", "/")
+        atomic_write_text(args.html_dashboard,
+                          render_html_dashboard(rows, fixed_all, run_info, now, repo_url, html_track, rel))
     t = track_totals(rows)
     sev = ", ".join(f"{SEVERITY_LABEL[r]} {t[SEVERITY_LABEL[r]]}" for r in (5, 4, 3, 2, 1, 0)
                     if t[SEVERITY_LABEL[r]])
@@ -377,7 +384,7 @@ def finish_track(args: argparse.Namespace, paths: dict[str, str], rows: list[dic
     print("\n" + "\n".join("  " + ln for ln in lines))
     for msg in (notes or [])[:10]:
         print(f"  NOTE: {msg}")
-    print(f"\nWrote {len(rows)} open finding(s) to {paths['findings']}")
+    print(f"\nWrote {len(rows)} open finding(s) to {paths['findings']}, {n_pages} asset page(s) to {pages_dir}")
     step_summary("### Veracode findings tracker\n\n" + "\n".join(f"- {ln}" for ln in lines))
     github_output(new=counts["new"], reopened=counts["reopened"], fixed=counts["fixed"] + counts["removed"],
                   open=len(rows))
@@ -392,7 +399,6 @@ def clear_mitigation(row: dict[str, Any]) -> None:
 # FINDINGS.md: the dashboard GitHub shows next to the code. Every value is escaped with md_safe.
 DASHBOARD_LIMIT = 500_000
 DASHBOARD_ROWS = 300
-DASHBOARD_DETAIL_ROWS = 25
 MITIGATIONS_DOC = "docs/MITIGATIONS.md"
 _RE_REPO_URL = re.compile(r"^https://[A-Za-z0-9.-]+(:\d+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -440,39 +446,95 @@ def dashboard_table(columns: list[str], rows: list[dict], cell: Callable[[dict, 
     return lines, used
 
 
-def dashboard_asset_summary(rows: Iterable[dict]) -> list[dict[str, Any]]:
-    """One compact row per tracked asset for a large set of findings."""
-    grouped: dict[str, tuple[str, str, Counter]] = {}
-    for row in rows:
-        name = str(row.get("Asset Name") or "Unknown asset")
-        asset_id = str(row.get("Asset ID") or "")
-        identity = asset_key(asset_id, name)
-        if identity not in grouped:
-            grouped[identity] = (name, asset_id, Counter())
-        counts = grouped[identity][2]
-        counts["Findings"] += 1
-        counts["New"] += 1 if row.get("Status") == NEW else 0
-        counts["Reopened"] += 1 if row.get("Status") == REOPENED else 0
-        severity = str(row.get("Severity") or "").title()
-        if severity in ("Critical", "High", "Medium", "Low"):
-            counts[severity] += 1
-    name_counts = Counter(name.lower() for name, _, _ in grouped.values())
-    summary = []
-    for name, asset_id, counts in grouped.values():
-        label = name if name_counts[name.lower()] == 1 or not asset_id else f"{name} ({asset_id})"
-        summary.append({"Asset Name": label, "Findings": counts["Findings"], "New": counts["New"],
-                        "Reopened": counts["Reopened"], "Critical": counts["Critical"],
-                        "High": counts["High"], "Medium": counts["Medium"], "Low": counts["Low"]})
-    return sorted(summary, key=lambda r: (-r["Critical"], -r["High"], -r["Medium"], -r["Low"],
-                                           r["Asset Name"].lower()))
+ASSET_PAGE_ROWS = 300          # findings per asset page; more pages are added when an asset has more
+ASSET_PAGE_MARKER = "<!-- veracode-iac-tracker: generated asset page -->"
+_ATTENTION = ("Expiring", "Expired")
+
+
+def _rel_ok(value: str, default: str) -> str:
+    value = value.replace("\\", "/").strip("/")
+    return value if re.fullmatch(r"[A-Za-z0-9_./-]+", value) else default
+
+
+def asset_page_slug(asset_id: Any, name: Any) -> str:
+    """Stable file name for an asset page: readable name plus a short hash of the asset identity."""
+    import hashlib
+    key = asset_key(asset_id, name)
+    base = re.sub(r"[^a-z0-9]+", "-", str(name or "asset").lower()).strip("-")[:50] or "asset"
+    return f"{base}-{hashlib.sha1(key.encode('utf-8')).hexdigest()[:6]}"
+
+
+def _row_cell(repo_url: str) -> Callable[[dict, str], str]:
+    def cell(r: dict, c: str) -> str:
+        if c == "Title":
+            return md_safe(r.get("Title"), 80)
+        if c == "Mitigation":
+            st = r.get("Mitigation Status") or ""
+            if not st:
+                return ""
+            ref = r.get("Mitigation Ref") or ""
+            mid = md_link(md_safe(r.get("Mitigation ID")), ref) or md_safe(r.get("Mitigation ID"))
+            exp = f", until {md_safe(r.get('Mitigation Expires'))}" if r.get("Mitigation Expires") else ""
+            return f"{md_safe(st)} ({md_safe(r.get('Mitigation Type'))}, {mid}{exp})"
+        if c == "Links":
+            links = [md_link("Veracode", r.get("Veracode Link"))]
+            if r.get("Mitigation Status") != "Mitigated":
+                links.append(md_link("Mitigate", mitigate_url(repo_url, r)))
+            return " · ".join(x for x in links if x)
+        if c == "Asset":
+            return md_safe(r.get("Asset Name"), 120)
+        if c == "Why":
+            st = r.get("Status")
+            ms = r.get("Mitigation Status") or ""
+            why = [st] if st in (NEW, REOPENED) else []
+            if ms in _ATTENTION:
+                why.append(f"{ms} {r.get('Mitigation Expires') or ''}".strip())
+            return md_safe(", ".join(why))
+        return md_safe(r.get(c), 160)
+    return cell
+
+
+def _by_asset(rows: Iterable[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        grouped.setdefault(asset_key(r.get("Asset ID"), r.get("Asset Name")), []).append(r)
+    return grouped
+
+
+def _sort_key(r: dict) -> tuple:
+    return (-severity_rank(r.get("Severity")), -_int_or(r.get("Days Open"), 0), str(r.get("Finding ID") or ""))
+
+
+def asset_table(rows: Iterable[dict]) -> list[dict[str, Any]]:
+    """One row per asset: unmitigated counts by severity plus what needs attention."""
+    out = []
+    for key, group in _by_asset(rows).items():
+        c: Counter = Counter()
+        for r in group:
+            ms = r.get("Mitigation Status") or ""
+            if ms in ("Mitigated", "Expiring"):
+                c["Mitigated"] += 1
+            else:
+                c[str(r.get("Severity") or "").title()] += 1
+            c["New"] += 1 if r.get("Status") in (NEW, REOPENED) else 0
+            c["Attention"] += 1 if ms in _ATTENTION else 0
+        name, asset_id = str(group[0].get("Asset Name") or "Unknown asset"), str(group[0].get("Asset ID") or "")
+        out.append({"key": key, "name": name, "id": asset_id, "slug": asset_page_slug(asset_id, name),
+                    "Findings": len(group), **{k: c[k] for k in ("Critical", "High", "Medium", "Low", "New",
+                                                                   "Mitigated", "Attention")}})
+    names = Counter(a["name"].lower() for a in out)
+    for a in out:
+        a["label"] = f"{a['name']} ({a['id']})" if names[a["name"].lower()] > 1 and a["id"] else a["name"]
+    return sorted(out, key=lambda a: (-a["Critical"], -a["High"], -a["Medium"], -a["Low"], a["label"].lower()))
 
 
 def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
-                     repo_url: str, track_rel: str = "tracking", html_rel: str = "site/index.html") -> str:
-    track_rel = track_rel.replace("\\", "/").strip("/")
-    track_rel = track_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", track_rel) else "tracking"
-    html_rel = html_rel.replace("\\", "/").strip("/")
-    html_rel = html_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", html_rel) else "site/index.html"
+                     repo_url: str, track_rel: str = "tracking", pages_rel: str = "findings",
+                     html_rel: str = "") -> str:
+    """FINDINGS.md: posture, what needs action (with links), one line per asset linking to its page."""
+    track_rel = _rel_ok(track_rel, "tracking")
+    pages_rel = _rel_ok(pages_rel, "findings")
+    html_rel = _rel_ok(html_rel, "") if html_rel else ""
     # docs/ sits next to the tracking folder (the repository root in the template)
     docs_rel = "/".join([p for p in track_rel.split("/")[:-1]] + [MITIGATIONS_DOC])
     today = now.date()
@@ -485,21 +547,23 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
                                   (days[len(days) // 2 - 1] + days[len(days) // 2]) / 2)
     if isinstance(median, float) and median.is_integer():
         median = int(median)
-    assets = run_info.get("assets", len({finding_ident(r)[0] for r in rows}))
+    assets = asset_table(rows)
     last = "never (offline only)"
     if run_info.get("run"):
         last = (f"{str(run_info['run']).replace('T', ' ').rstrip('Z')} UTC, +{run_info.get('new', 0)} new, "
                 f"{run_info.get('reopened', 0)} reopened, -{int(run_info.get('fixed', 0)) + int(run_info.get('removed', 0))}"
                 " fixed")
     out = ["# Veracode findings", "",
-           f"> Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC · Assets: {md_safe(assets)} · Last run: {md_safe(last)}",
-           f"> Interactive dashboard: [{html_rel}]({html_rel}) — every actionable finding keeps its Mitigate link.",
-           "> Full data: "
-           f"[{track_rel}/findings.csv]({track_rel}/findings.csv) · "
-           f"[{track_rel}/fixed.csv]({track_rel}/fixed.csv)",
-           f"> Mitigations: use the interactive dashboard. Rules: [{MITIGATIONS_DOC}]({docs_rel}).",
+           f"> Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC · Assets: {len(assets)} · Open findings: {len(rows)} · "
+           f"Last run: {md_safe(last)}",
+           ">",
+           f"> Every finding, with its Veracode and Mitigate links, is on its asset page under `{pages_rel}/`. "
+           f"Full data: [{track_rel}/findings.csv]({track_rel}/findings.csv) · "
+           f"[{track_rel}/fixed.csv]({track_rel}/fixed.csv)" + (f" · [HTML dashboard]({html_rel})" if html_rel else ""),
+           ">",
+           f"> Mitigations: click **Mitigate** on a finding. Rules: [{MITIGATIONS_DOC}]({docs_rel}).",
            "", "## Risk snapshot", "",
-           "| Critical | High | Medium | Low | Mitigated | Expiring (≤30d) | Expired | New today | Fixed (7d) "
+           "| Critical | High | Medium | Low | Mitigated | Expiring (≤30d) | Expired | New or reopened | Fixed (7d) "
            "| Fixed (30d) | Median days open |",
            "|" + " --- |" * 11,
            f"| {t['Critical']} | {t['High']} | {t['Medium']} | {t['Low']} | {t['mitigated']} | {t['expiring']} | "
@@ -507,63 +571,96 @@ def render_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, no
            f"{len(recent)} | {median} |", ""]
     if not repo_url:
         out += ["_Mitigate links are off: run in GitHub Actions or pass --repo-url._", ""]
+    cell = _row_cell(repo_url)
 
-    def cell(r: dict, c: str) -> str:
-        if c == "Title":
-            return md_safe(r.get("Title"), 80)
-        if c == "Mitigation":
-            st = r.get("Mitigation Status") or ""
-            if not st:
-                return ""
-            ref = r.get("Mitigation Ref") or ""
-            mid = md_link(md_safe(r.get("Mitigation ID")), ref) or md_safe(r.get("Mitigation ID"))
-            return f"{md_safe(st)} ({md_safe(r.get('Mitigation Type'))}, {mid})"
-        if c == "Links":
-            links = [md_link("Veracode", r.get("Veracode Link"))]
-            if r.get("Mitigation Status") != "Mitigated":
-                links.append(md_link("Mitigate", mitigate_url(repo_url, r)))
-            return " ".join(x for x in links if x)
-        if c == "Asset":
-            return md_safe(r.get("Asset Name"), 120)
-        return md_safe(r.get(c), 160)
+    action = sorted((r for r in rows if r.get("Status") in (NEW, REOPENED) or r.get("Mitigation Status") in _ATTENTION),
+                    key=lambda r: (0 if r.get("Mitigation Status") == "Expired" else 1,) + _sort_key(r))
+    out += [f"## Needs action ({len(action)})", "",
+            "_New or reopened findings and mitigations that expire within 30 days or already expired._", ""]
+    lines, _ = dashboard_table(["Why", "Severity", "Finding ID", "Title", "Asset", "Days Open", "Links"], action, cell,
+                               DASHBOARD_LIMIT // 3, f"The rest are on the asset pages under {pages_rel}/.")
+    out += lines + [""]
 
-    open_rows = [r for r in rows if r.get("Mitigation Status") not in ("Mitigated", "Expiring")]
-    new_rows = [r for r in rows if r.get("Status") in (NEW, REOPENED)]
-    if len(new_rows) > DASHBOARD_DETAIL_ROWS:
-        new_section = ("New findings by asset", ["Asset", "New", "Reopened", "Critical", "High", "Medium", "Low"],
-                       dashboard_asset_summary(new_rows), len(new_rows))
-    else:
-        new_section = ("New since last run", ["Status", "Severity", "Finding ID", "Title", "Asset", "Location",
-                                                "Days Open", "Mitigation", "Links"], new_rows, len(new_rows))
-    if len(open_rows) > DASHBOARD_DETAIL_ROWS:
-        open_section = ("Open findings by asset", ["Asset", "Findings", "Critical", "High", "Medium", "Low"],
-                        dashboard_asset_summary(open_rows), len(open_rows))
-    else:
-        open_section = ("Open findings", ["Severity", "Finding ID", "Title", "Asset", "Location", "Days Open",
-                                            "Mitigation", "Links"], open_rows, len(open_rows))
-    sections = [
-        new_section,
-        ("Expiring or expired mitigations", ["Severity", "Finding ID", "Title", "Asset", "Mitigation Expires",
-                                             "Mitigation", "Links"],
-         [r for r in rows if r.get("Mitigation Status") in ("Expiring", "Expired")],
-         sum(1 for r in rows if r.get("Mitigation Status") in ("Expiring", "Expired"))),
-        open_section,
-        ("Fixed in the last 30 days", ["Fixed On", "Severity", "Finding ID", "Title", "Asset", "Location",
-                                       "Days Open", "Fixed Reason"], [r for _, r in recent], len(recent)),
-    ]
-    used = sum(len(x) + 1 for x in out)
-    for i, (title, cols, srows, total) in enumerate(sections):
-        budget = (DASHBOARD_LIMIT - used - 2000) // (len(sections) - i)
-        out += [f"## {title} ({total})", ""]
-        used += len(title) + 20
-        if title.endswith("by asset"):
-            out += ["_Grouped by asset because this section has more than 25 findings._", ""]
-            used += 70
-        lines, n = dashboard_table(cols, srows, cell, budget,
-                                   f"Full list in {track_rel}/" + ("fixed.csv" if i == 3 else "findings.csv") + ".")
-        out += lines + [""]
-        used += n
+    out += [f"## Assets ({len(assets)})", "",
+            "_Counts are unmitigated findings. Click an asset for every finding with its links._", "",
+            "| Asset | Findings | Critical | High | Medium | Low | New | Mitigated | Expiring / expired |",
+            "|" + " --- |" * 9]
+    for a in assets:
+        out.append(f"| [{md_safe(a['label'], 120)}]({pages_rel}/{a['slug']}.md) | {a['Findings']} | {a['Critical']} | "
+                   f"{a['High']} | {a['Medium']} | {a['Low']} | {a['New']} | {a['Mitigated']} | {a['Attention']} |")
+    if not assets:
+        out.append("| _No open findings._ | | | | | | | | |")
+    out.append("")
+
+    out += [f"## Fixed in the last 30 days ({len(recent)})", ""]
+    lines, _ = dashboard_table(["Fixed On", "Severity", "Finding ID", "Title", "Asset", "Location", "Days Open",
+                                "Fixed Reason"], [r for _, r in recent], cell, DASHBOARD_LIMIT // 3,
+                               f"Full list in {track_rel}/fixed.csv.")
+    out += lines + [""]
     return "\n".join(out)
+
+
+def render_asset_pages(rows: list[dict], now: dt.datetime, repo_url: str,
+                       dashboard_rel: str = "../FINDINGS.md") -> dict[str, str]:
+    """{file name: Markdown} for every asset. Each page lists every finding of the asset with its links;
+    assets with more than ASSET_PAGE_ROWS findings get numbered continuation pages."""
+    dashboard_rel = _rel_ok(dashboard_rel, "../FINDINGS.md")
+    cell = _row_cell(repo_url)
+    pages: dict[str, str] = {}
+    cols = ["Status", "Severity", "Finding ID", "Title", "Location", "Days Open", "Mitigation", "Links"]
+    for a in asset_table(rows):
+        group = _by_asset(rows)[a["key"]]
+        open_rows = sorted((r for r in group if r.get("Mitigation Status") not in ("Mitigated", "Expiring")), key=_sort_key)
+        mitigated = sorted((r for r in group if r.get("Mitigation Status") in ("Mitigated", "Expiring")), key=_sort_key)
+        items = [("Open findings", r) for r in open_rows] + [("Mitigated", r) for r in mitigated]
+        chunks = [items[i:i + ASSET_PAGE_ROWS] for i in range(0, len(items), ASSET_PAGE_ROWS)] or [[]]
+        names = [a["slug"] + ("" if i == 0 else f"-{i + 1}") + ".md" for i in range(len(chunks))]
+        for i, chunk in enumerate(chunks):
+            out = [ASSET_PAGE_MARKER, f"# {md_safe(a['name'], 200)}", "",
+                   f"[← Dashboard]({dashboard_rel}) · Updated: {now.strftime('%Y-%m-%d %H:%M')} UTC"
+                   + (f" · Asset ID: `{md_safe(a['id'])}`" if a["id"] else ""), ""]
+            if len(chunks) > 1:
+                nav = " · ".join(f"**{n + 1}**" if n == i else f"[{n + 1}]({names[n]})" for n in range(len(chunks)))
+                out += [f"Page {i + 1} of {len(chunks)}: {nav}", ""]
+            if i == 0:
+                out += ["| Critical | High | Medium | Low | Mitigated | New or reopened | Expiring / expired |",
+                        "|" + " --- |" * 7,
+                        f"| {a['Critical']} | {a['High']} | {a['Medium']} | {a['Low']} | {a['Mitigated']} | {a['New']} | "
+                        f"{a['Attention']} |", ""]
+                if not repo_url:
+                    out += ["_Mitigate links are off: run in GitHub Actions or pass --repo-url._", ""]
+            section = None
+            for title, r in chunk:
+                if title != section:
+                    section = title
+                    total = len(open_rows) if title == "Open findings" else len(mitigated)
+                    if out[-1] != "":
+                        out.append("")
+                    out += [f"## {title} ({total})", "", "| " + " | ".join(cols) + " |", "|" + " --- |" * len(cols)]
+                out.append("| " + " | ".join(cell(r, c) for c in cols) + " |")
+            if not chunk:
+                out += ["## Open findings (0)", "", "None."]
+            pages[names[i]] = "\n".join(out) + "\n"
+    return pages
+
+
+def write_asset_pages(folder: str, pages: dict[str, str]) -> int:
+    """Writes the pages and removes generated pages of assets that no longer exist. Returns pages written."""
+    os.makedirs(folder, exist_ok=True)
+    for name, text in pages.items():
+        atomic_write_text(os.path.join(folder, name), text)
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if name in pages or not name.endswith(".md") or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                first = fh.readline().strip()
+        except OSError:
+            continue
+        if first == ASSET_PAGE_MARKER:
+            os.remove(path)
+    return len(pages)
 
 
 HTML_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
@@ -582,15 +679,22 @@ def _int_or(value: Any, default: int = -1) -> int:
 
 
 def render_html_dashboard(rows: list[dict], fixed_all: list[dict], run_info: dict, now: dt.datetime,
-                          repo_url: str, track_rel: str = "../tracking") -> str:
+                          repo_url: str, track_rel: str = "../tracking", repo_track_rel: str = "") -> str:
     """Interactive static dashboard (tracker/dashboard.html + a JSON payload).
 
     Every finding is in the page with its Veracode and Mitigate links; the page filters client-side.
     Values are only ever inserted through textContent, and only https URLs are turned into links.
+    With repo_url and repo_track_rel (tracking folder relative to the repository root), the CSV and docs
+    links point at the repository on GitHub, so they work when only the page is published to GitHub Pages.
     """
     track_rel = track_rel.replace("\\", "/").strip("/")
     track_rel = track_rel if re.fullmatch(r"[A-Za-z0-9_./-]+", track_rel) else "../tracking"
     docs_rel = "/".join(track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+    repo_track_rel = _rel_ok(repo_track_rel, "") if repo_track_rel else ""
+    if repo_url and repo_track_rel and not repo_track_rel.startswith(".."):
+        base = f"{repo_url}/blob/HEAD/"
+        docs_rel = base + "/".join(repo_track_rel.split("/")[:-1] + [MITIGATIONS_DOC])
+        track_rel = base + repo_track_rel
     today = now.date()
     findings = []
     for row in rows:
@@ -1425,8 +1529,11 @@ Exports with finding filters are not supported by this tracker.""")
                         "without calling Veracode.")
     g.add_argument("--dashboard", metavar="FILE",
                    help="With --track: where to write the Markdown dashboard (default FINDINGS.md next to DIR).")
+    g.add_argument("--asset-pages", metavar="DIR",
+                   help="With --track: folder for the per-asset Markdown pages (default findings/ next to the dashboard).")
     g.add_argument("--html-dashboard", metavar="FILE",
-                   help="With --track: where to write the interactive HTML dashboard (default site/index.html next to DIR).")
+                   help="With --track: also write a self-contained HTML dashboard (for GitHub Pages on GitHub "
+                        "Enterprise Cloud, where Pages can be private). Off by default: GitHub shows HTML as source.")
     g.add_argument("--repo-url", metavar="URL",
                    help="With --track: https://github.com/<org>/<repo>, for the Mitigate links in the dashboard. "
                         "Default: from GITHUB_SERVER_URL and GITHUB_REPOSITORY in GitHub Actions.")
