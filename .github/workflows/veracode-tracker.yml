@@ -2,8 +2,9 @@
 #
 #   tracking/findings.csv   open findings (New, Open, Reopened, Asset Missing) with their mitigation status
 #   tracking/fixed.csv      findings that were fixed, with the date and days open
-#   site/index.html         interactive dashboard, with a Mitigate link per actionable finding
-#   FINDINGS.md             compact repository summary
+#   FINDINGS.md             dashboard: risk snapshot, what needs action, one line per asset
+#   findings/<asset>.md     every finding of the asset with its Veracode and Mitigate links
+#   site/index.html         optional HTML dashboard, only when ENABLE_FINDINGS_PAGES=true (GitHub Enterprise Cloud)
 #
 # Setup: repository secrets VERACODE_API_ID and VERACODE_API_KEY. Optional repository variable
 # VERACODE_TRACK_ARGS with scan filters, e.g. --asset my-org/*. See README.md.
@@ -16,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # commit tracking/, site/, FINDINGS.md and mitigations.yml
+  contents: write   # commit tracking/, findings/, FINDINGS.md, mitigations.yml (and site/ when enabled)
   issues: write     # create the labels and the tracker-failure issue
 
 concurrency:
@@ -58,9 +59,11 @@ jobs:
           VERACODE_API_ID: ${{ secrets.VERACODE_API_ID }}
           VERACODE_API_KEY: ${{ secrets.VERACODE_API_KEY }}
           VERACODE_TRACK_ARGS: ${{ vars.VERACODE_TRACK_ARGS }}
+          HTML_DASHBOARD: ${{ vars.ENABLE_FINDINGS_PAGES == 'true' && 'site/index.html' || '' }}
         run: |
           set -f
           read -ra args <<< "${VERACODE_TRACK_ARGS:-}"
+          if [ -n "$HTML_DASHBOARD" ]; then args+=(--html-dashboard "$HTML_DASHBOARD"); fi
           python tracker/veracode_iac_tracker.py --track tracking --mitigations mitigations.yml \
             -o "$RUNNER_TEMP/veracode-findings.xlsx" "${args[@]}"
 
@@ -69,7 +72,8 @@ jobs:
           NEW: ${{ steps.track.outputs.new }}
           FIXED: ${{ steps.track.outputs.fixed }}
         run: |
-          git add -A -- tracking site FINDINGS.md mitigations.yml
+          git add -A -- tracking findings FINDINGS.md mitigations.yml
+          if [ -d site ]; then git add -A -- site; fi
           if git diff --cached --quiet; then echo "No changes."; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

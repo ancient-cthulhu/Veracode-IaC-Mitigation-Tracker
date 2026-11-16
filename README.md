@@ -20,28 +20,31 @@ Use a Veracode API service account that can view Container and IaC scans. The tr
 1. Reads the latest scan for each matching asset.
 2. Keeps a baseline in `tracking/findings.csv`.
 3. Marks findings **New**, **Open**, **Fixed**, or **Reopened**.
-4. Writes the interactive dashboard, a compact Markdown fallback, and an Excel artifact.
+4. Writes `FINDINGS.md`, one page per asset under `findings/`, and an Excel artifact.
 
-## Interactive dashboard
+## Reading the report
 
-Every run writes `site/index.html`. It has asset and severity summaries, search and filters, pagination, and a **Mitigate** link for every actionable finding—no links disappear when the report is large. `FINDINGS.md` remains a compact repository summary and points to it.
+Everything renders on GitHub, so repository permissions decide who sees it.
 
-The HTML stays in the repository by default. To host it with GitHub Pages, first enable **Settings → Pages → GitHub Actions**, then add the repository variable `ENABLE_FINDINGS_PAGES=true`. GitHub Pages can be public even when the repository is private; do not enable it for sensitive finding data unless the visibility is approved.
+- `FINDINGS.md` — risk snapshot, **Needs action** (new, reopened, expiring and expired, each with its Mitigate link), one row per asset with severity counts, and what was fixed in the last 30 days.
+- `findings/<asset>.md` — every finding of that asset with its Veracode and Mitigate links. Assets with more than 300 findings get numbered continuation pages, so no page is too large for GitHub to render and no link is ever dropped.
+
+Optional HTML dashboard (search, filters, asset drill-down) for organizations on GitHub Enterprise Cloud, where GitHub Pages can be private: enable **Settings → Pages → GitHub Actions** and add the repository variable `ENABLE_FINDINGS_PAGES=true`. On other plans Pages is public, so leave it off.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `site/index.html` | Interactive dashboard with every finding and its action links. |
-| `FINDINGS.md` | Compact repository summary and fallback. |
+| `FINDINGS.md` | Dashboard: snapshot, needs action, assets, recently fixed. |
+| `findings/` | One Markdown page per asset with every finding and its links. |
 | `tracking/findings.csv` | Current open findings. |
 | `tracking/fixed.csv` | Findings resolved by a later scan. |
 | `mitigations.yml` | Approved mitigation rules. |
-| `tracker/` | Tracker, Veracode client, and report writers. |
+| `tracker/` | Tracker, Veracode client, report writers, optional HTML template. |
 
 ## Mitigations
 
-A developer selects **Mitigate** in `site/index.html` and submits the pre-filled GitHub issue. A login listed in `MITIGATION_APPROVERS` adds the `approved` label. The workflow validates the request, writes a rule to `mitigations.yml`, refreshes the dashboard, and closes the issue.
+A developer clicks **Mitigate** on a finding (in `FINDINGS.md` or the asset page) and submits the pre-filled GitHub issue. A login listed in `MITIGATION_APPROVERS` adds the `approved` label. The workflow validates the request, writes a rule to `mitigations.yml`, refreshes the report, and closes the issue.
 
 See [Mitigations](docs/MITIGATIONS.md) for rule fields, expiry handling, scopes, and examples.
 

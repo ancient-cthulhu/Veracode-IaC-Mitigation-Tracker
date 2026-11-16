@@ -17,7 +17,7 @@ Un tracker autónomo de GitHub Actions para los hallazgos de Veracode Container,
 
 | Cuándo | Qué pasa |
 | --- | --- |
-| Día 1 | La ejecución diaria encuentra `AVD-AWS-0086` en `acme/payments-infra`. Aparece como **New** en `site/index.html` con un enlace **Mitigate** |
+| Día 1 | La ejecución diaria encuentra `AVD-AWS-0086` en `acme/payments-infra`. Aparece como **New** en `FINDINGS.md` con un enlace **Mitigate** |
 | Día 2 | Sigue en el último escaneo: **Open**. Days Open va sumando |
 | Solicitud | Un desarrollador pulsa **Mitigate**. Se abre una incidencia ya rellenada; elige el tipo, escribe el motivo y una fecha de caducidad |
 | Aprobación | Un aprobador añade la etiqueta `approved`. El bot registra `M-0001` en `mitigations.yml`, marca el hallazgo como **Mitigated**, comenta y cierra la incidencia |
@@ -31,14 +31,14 @@ Cada cambio es un commit (`Daily findings: +2 new, -1 fixed`), así que el histo
 
 | Archivo | Contenido |
 | --- | --- |
-| `site/index.html` | Panel interactivo: agrupa por asset, filtra cada hallazgo y mantiene los enlaces Veracode y Mitigate |
-| `FINDINGS.md` | Resumen compacto en el repositorio |
+| `FINDINGS.md` | Panel: totales, lo que requiere acción (con enlaces Mitigate), una fila por asset, corregidos en 30 días |
+| `findings/` | Una página por asset con todos sus hallazgos y sus enlaces Veracode y Mitigate (paginada a partir de 300) |
 | `tracking/findings.csv` | Hallazgos abiertos: estado, severidad, ubicación, First Seen, Days Open, mitigación |
 | `tracking/fixed.csv` | Hallazgos corregidos, con Fixed On y Days Open |
 | `mitigations.yml` | Mitigaciones aprobadas. Consulta [MITIGATIONS.md](MITIGATIONS.md) |
 | `tracker/` | Seguimiento, cliente de API de Veracode y utilidades de salida |
 
-`site/index.html`, `FINDINGS.md` y `tracking/` se crean en la primera ejecución. Cada ejecución adjunta además un informe completo
+`FINDINGS.md`, `findings/` y `tracking/` se crean en la primera ejecución. Cada ejecución adjunta además un informe completo
 en Excel (artefacto `veracode-findings`, 30 días, sin líneas de código).
 
 ## Estados
@@ -64,7 +64,8 @@ ejecución correcta). Si la protección de rama rechaza el push, la actualizaci�
 | `--mitigations ARCHIVO` | El archivo de reglas, `mitigations.yml` |
 | `--check-mitigations ARCHIVO` | Valida y lista las reglas, y termina. `--against BASE` muestra los cambios respecto a otro archivo |
 | `--dashboard ARCHIVO` | Ruta del panel (por defecto `FINDINGS.md` junto a `DIR`) |
-| `--html-dashboard ARCHIVO` | Ruta del panel interactivo (por defecto `site/index.html`) |
+| `--asset-pages DIR` | Carpeta de las páginas por asset (por defecto `findings/` junto al panel) |
+| `--html-dashboard ARCHIVO` | Además escribe un panel HTML (para GitHub Pages en GitHub Enterprise Cloud, donde puede ser privado) |
 | `--repo-url URL` | `https://github.com/<org>/<repo>` para los enlaces Mitigate (se detecta en GitHub Actions) |
 | `--migrate CSV_ANTIGUO` | Importa las mitigaciones de un `veracode-findings.csv` (automático si está junto a `DIR`) |
 | `-o ARCHIVO` | Con `--track`: escribe además cada hallazgo actual con todas las columnas (`.xlsx`, `.csv`, `.json`, `.jsonl`) |
