@@ -753,14 +753,21 @@ def fetch_scan_findings(client: Client, scan: dict) -> Optional[list[dict]]:
     return None
 
 
+def scans_digest(scan_ids: Iterable[Any]) -> str:
+    """Short fingerprint of a set of scan IDs: tells whether any asset was scanned again."""
+    import hashlib
+    ids = sorted({str(i) for i in scan_ids if i})
+    return hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()[:16] if ids else ""
+
+
 def collect_latest(base_url: Optional[str], link_base: Optional[str], now: dt.datetime, *,
                    asset: Optional[list[str]] = None, exclude_asset: Optional[list[str]] = None,
                    scan_type: Optional[list[str]] = None, asset_type: Optional[list[str]] = None,
                    scanned_by: Optional[list[str]] = None, policy: Optional[str] = None,
                    since: Optional[str] = None, until: Optional[str] = None, workers: int = 4, rps: float = 2.0,
                    max_attempts: int = 6, timeout: int = 90, ca_cert: Optional[str] = None,
-                   minter: Optional[Callable[[], str]] = None,
-                   ) -> tuple[list[dict], list[dict], list[tuple[str, str]]]:
+                   minter: Optional[Callable[[], str]] = None, unchanged: Optional[str] = None,
+                   ) -> tuple[list[dict], Optional[list[dict]], list[tuple[str, str]]]:
     """Every finding of the latest scan per asset.
 
     base_url / link_base: None derives them from the credentials' region (give them for FedRAMP).
@@ -772,6 +779,8 @@ def collect_latest(base_url: Optional[str], link_base: Optional[str], now: dt.da
                     findings were read in full
       finding_rows  finding_row() of every finding in those scans (Code Lines included)
       failures      (scope, detail) of every failed request; not empty means the data is incomplete
+    unchanged: a scans_digest() of the last run. When the latest scans picked now have the same digest, the
+    findings are not read and finding_rows is None. Picked scan rows carry "_picked": True.
     Raises VeracodeError (exit_code 2 for bad input, 1 when the token or the scan list cannot be read)."""
     if policy is not None and policy not in POLICY_VALUES:
         raise VeracodeError(f"policy must be one of {', '.join(POLICY_VALUES)}", 2)
@@ -803,6 +812,11 @@ def collect_latest(base_url: Optional[str], link_base: Optional[str], now: dt.da
     picked = [(s, r) for s, r in zip(raw, scans) if in_window(s, start, end) and all(f.test(r) for f in filters)]
     keep_ids = latest_scan_ids([s for s, _ in picked])  # the latest among the scans that passed the filters
     picked = [(s, r) for s, r in picked if str(s.get("scan_id") or "") in keep_ids]
+    for _, r in picked:
+        r["_picked"] = True
+    if unchanged and scans_digest(s.get("scan_id") for s, _ in picked) == unchanged:
+        print(f"  {len(raw)} scans in tenant; the latest scan of each of {len(picked)} asset(s) was already read")
+        return scans, None, list(failures.items)
     print(f"  {len(raw)} scans in tenant; reading the latest scan of {len(picked)} asset(s)")
 
     rows: list[dict] = []

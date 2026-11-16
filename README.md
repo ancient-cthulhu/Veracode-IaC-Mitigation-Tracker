@@ -17,10 +17,12 @@ Use a Veracode API service account that can view Container and IaC scans. The tr
 
 ## What happens each run
 
-1. Reads the latest scan for each matching asset.
-2. Keeps a baseline in `tracking/findings.csv`.
-3. Marks findings **New**, **Open**, **Fixed**, or **Reopened**.
-4. Writes `FINDINGS.md`, one page per asset under `findings/`, and an Excel artifact.
+1. Reads the scan list. If no asset was scanned again since the last run, it stops there: findings are not downloaded, only mitigations and teams are refreshed.
+2. Otherwise reads the latest scan of each matching asset and updates the baseline in `tracking/findings.csv`.
+3. Marks findings **New**, **Open**, **Reopened**, or **Fixed**. New and Reopened findings are open findings; they stay New until their asset is scanned again.
+4. Writes `FINDINGS.md`, the team and asset pages under `findings/`, and an Excel artifact.
+
+It commits only when something changed. The files hold dates, not ages, so a day without new scans, fixes, or mitigation changes produces no commit (the optional HTML dashboard calculates ages in the browser).
 
 ## Reading the report
 

@@ -176,13 +176,13 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
         <div class="seg" id="view" role="group" aria-label="View">
           <button data-view="all" class="active">All</button>
           <button data-view="action">Needs action</button>
-          <button data-view="new">New this run</button>
+          <button data-view="new">New / reopened</button>
           <button data-view="mitigated">Mitigated</button>
         </div>
         <select id="severity" aria-label="Severity"><option value="">Any severity</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select>
         <select id="team" aria-label="Team" hidden><option value="">Any team</option></select>
         <select id="asset-select" aria-label="Asset"><option value="">Any asset</option></select>
-        <select id="status" aria-label="Status"><option value="">Any status</option><option>New</option><option>Reopened</option><option>Open</option><option>Asset Missing</option></select>
+        <select id="status" aria-label="Status"><option value="">All open</option><option value="New">New (not rescanned yet)</option><option>Reopened</option><option value="Open">Seen in a later scan</option><option>Asset Missing</option></select>
         <select id="type" aria-label="Finding type"><option value="">Any type</option></select>
       </div>
       <div class="status-line"><span id="shown"></span><button class="clear" id="clear" hidden>Clear filters</button></div>
@@ -217,6 +217,11 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
 (() => {
   const D = JSON.parse(document.getElementById('data').textContent);
   const F = D.findings, C = D.config, SEV = ['Critical', 'High', 'Medium', 'Low'];
+  // Ages are computed here, so the generated page does not change every day
+  const DAY = 864e5, NOW = Date.now();
+  F.forEach(f => { const t = Date.parse(f.firstSeen); f.daysOpen = isNaN(t) ? -1 : Math.max(0, Math.floor((NOW - t) / DAY)); });
+  const AGES = F.map(f => f.daysOpen).filter(d => d >= 0).sort((a, b) => a - b);
+  const MEDIAN = !AGES.length ? '' : AGES.length % 2 ? AGES[(AGES.length - 1) / 2] : Math.round((AGES[AGES.length / 2 - 1] + AGES[AGES.length / 2]) / 2);
   const $ = id => document.getElementById(id);
   const PAGE = 100;
   const state = { q: '', view: 'all', severity: '', status: '', type: '', team: '', asset: '', sort: 'severity', asc: false, page: 0 };
@@ -233,8 +238,8 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
   // Header
   (() => {
     const m = $('meta');
-    m.append('Updated ', Object.assign(el('b', C.updated)), ' UTC');
-    if (C.lastRun) { m.append(el('span', '·', 'sep'), 'Last run ', el('b', C.lastRun.when), ': +' + C.lastRun.new + ' new, ' + C.lastRun.reopened + ' reopened, −' + C.lastRun.fixed + ' fixed'); }
+    m.append('Latest scan ', el('b', C.latestScan || 'none'));
+    if (C.lastRun) { m.append(el('span', '·', 'sep'), 'Last change ', el('b', C.lastRun.when), ': +' + C.lastRun.new + ' new, ' + C.lastRun.reopened + ' reopened, −' + C.lastRun.fixed + ' fixed'); }
     m.append(el('span', '·', 'sep'), el('b', String(C.assets)), ' assets', el('span', '·', 'sep'), el('b', String(F.length)), ' open findings');
     const nav = $('links');
     const add = (label, href, cls) => { const a = el('a', label, 'btn' + (cls ? ' ' + cls : '')); a.href = href; nav.append(a); };
@@ -262,7 +267,7 @@ details.fixed[open] summary { border-bottom: 1px solid var(--line); }
   cell(T.expiring, 'Expiring ≤30d', { key: 'mit:Expiring', tone: T.expiring ? 't-warn' : '', onclick: () => set({ view: 'action', q: '' , mit: 'Expiring' }) });
   cell(T.expired, 'Expired', { key: 'mit:Expired', tone: T.expired ? 't-danger' : '', onclick: () => set({ view: 'action', mit: 'Expired' }) });
   cell(T.fixed30, 'Fixed, 30 days', { static: true, group: true });
-  cell(T.medianDays === '' ? '–' : T.medianDays + 'd', 'Median age', { static: true });
+  cell(MEDIAN === '' ? '–' : MEDIAN + 'd', 'Median age', { static: true });
 
   // Assets rail
   const assetMap = new Map();

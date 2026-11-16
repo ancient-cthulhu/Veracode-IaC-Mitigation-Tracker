@@ -18,7 +18,7 @@ Un tracker autónomo de GitHub Actions para los hallazgos de Veracode Container,
 | Cuándo | Qué pasa |
 | --- | --- |
 | Día 1 | La ejecución diaria encuentra `AVD-AWS-0086` en `acme/payments-infra`. Aparece como **New** en `FINDINGS.md` con un enlace **Mitigate** |
-| Día 2 | Sigue en el último escaneo: **Open**. Days Open va sumando |
+| Día 2 | Sigue siendo **New** hasta que su asset se vuelve a escanear; si sigue en ese escaneo, pasa a **Open** |
 | Solicitud | Un desarrollador pulsa **Mitigate**. Se abre una incidencia ya rellenada; elige el tipo, escribe el motivo y una fecha de caducidad |
 | Aprobación | Un aprobador añade la etiqueta `approved`. El bot registra `M-0001` en `mitigations.yml`, marca el hallazgo como **Mitigated**, comenta y cierra la incidencia |
 | Corrección | Otro hallazgo se corrige y su asset se vuelve a escanear. La siguiente ejecución lo pasa a `tracking/fixed.csv` con Fixed On y Days Open |
@@ -33,7 +33,7 @@ Cada cambio es un commit (`Daily findings: +2 new, -1 fixed`), así que el histo
 | --- | --- |
 | `FINDINGS.md` | Panel: totales, lo que requiere acción (con enlaces Mitigate), una fila por asset, corregidos en 30 días |
 | `findings/` | Una página por asset con todos sus hallazgos y sus enlaces Veracode y Mitigate (paginada a partir de 300) |
-| `tracking/findings.csv` | Hallazgos abiertos: estado, severidad, ubicación, First Seen, Days Open, mitigación |
+| `tracking/findings.csv` | Hallazgos abiertos: estado, severidad, ubicación, First Seen, mitigación |
 | `tracking/fixed.csv` | Hallazgos corregidos, con Fixed On y Days Open |
 | `mitigations.yml` | Mitigaciones aprobadas. Consulta [MITIGATIONS.md](MITIGATIONS.md) |
 | `teams.yml` | Opcional: equipos y los patrones de assets que les pertenecen. Añade la columna Team, la tabla Teams, una página por equipo y el filtro por equipo |
@@ -46,8 +46,8 @@ en Excel (artefacto `veracode-findings`, 30 días, sin líneas de código).
 
 | Status | Significado |
 | --- | --- |
-| New | Visto por primera vez en esta ejecución. Open desde el día siguiente |
-| Open | Está en el último escaneo de su asset |
+| New | Hallazgo abierto visto por primera vez. Sigue New hasta que su asset se vuelve a escanear |
+| Open | Sigue en un escaneo posterior de su asset |
 | Reopened | Estaba corregido y ha vuelto |
 | Asset Missing | El asset ya no está en Veracode. A los 30 días pasa a `fixed.csv` como `asset-removed` |
 | Fixed | Ya no está en un escaneo más reciente de su asset. Pasa a `fixed.csv` |
@@ -61,7 +61,7 @@ ejecución correcta). Si la protección de rama rechaza el push, la actualizaci�
 | Flag | Efecto |
 | --- | --- |
 | `--track DIR` | Actualiza `DIR/findings.csv`, `DIR/fixed.csv` y el panel |
-| `--offline` | Con `--track`: actualiza Days Open, las mitigaciones y el panel sin llamar a Veracode |
+| `--offline` | Con `--track`: actualiza las mitigaciones, los equipos y el panel sin llamar a Veracode |
 | `--mitigations ARCHIVO` | El archivo de reglas, `mitigations.yml` |
 | `--check-mitigations ARCHIVO` | Valida y lista las reglas, y termina. `--against BASE` muestra los cambios respecto a otro archivo |
 | `--dashboard ARCHIVO` | Ruta del panel (por defecto `FINDINGS.md` junto a `DIR`) |
